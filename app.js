@@ -161,8 +161,8 @@
     return liste;
   }
   // ---------- Fourchette d'arrivée au ravito suivant ----------
-  // Plan initial, sauf si on est parti en retard : alors on recale sur l'heure
-  // de départ réelle + temps de segment (max +15 %), sans dépasser la barrière.
+  // Toujours en direct : heure de départ réelle (course ou ravito) + temps min/max
+  // du segment, que tu sois en avance ou en retard. Jamais au-delà de la barrière.
   function departDuSegment(i) {
     if (i === 0) return dateDepart();
     const p = etat.passages[i];
@@ -173,16 +173,12 @@
     const planMin = dateDuJour(seg.arriveeMin);
     const planMax = dateDuJour(seg.arriveeMax);
     const barriere = dateDuJour(seg.barriere);
-    const recalMax = new Date(depart.getTime() + dureeEnMs(seg.tempsMax));
-    let min = planMin, max = planMax, recalee = false;
-    if (recalMax > planMax) {
-      recalee = true;
-      const recalMin = new Date(depart.getTime() + dureeEnMs(seg.tempsMin));
-      min = recalMin > planMin ? recalMin : planMin;
-      max = new Date(depart.getTime() + dureeEnMs(seg.tempsMax) * 1.15);
-      if (max > barriere) max = barriere;
-      if (min > max) min = max;
-    }
+    let min = new Date(depart.getTime() + dureeEnMs(seg.tempsMin));
+    let max = new Date(depart.getTime() + dureeEnMs(seg.tempsMax));
+    if (max > barriere) max = barriere;
+    if (min > max) min = max;
+    // « recalée » = différente du plan initial d'au moins 1 min (on affiche alors le plan en petit)
+    const recalee = Math.abs(min - planMin) >= 60000 || Math.abs(max - planMax) >= 60000;
     return {
       min: min, max: max, recalee: recalee, barriere: barriere,
       depassee: n > max,
@@ -218,16 +214,16 @@
           <div class="bloc-label">${label}</div>
           <div class="gros ${serre ? "rouge" : "orange"}">Barrière ${joli(seg.barriere)}</div>
           <div class="consigne">${marge}${serre ? " · cours les replats, mange en marchant" : " · avance régulièrement"}</div>
-          <div class="info">Fourchette ${fen.recalee ? jolieDate(fen.min) + " – " + jolieDate(fen.max) : plan} dépassée</div>
+          <div class="info">Fourchette ${jolieDate(fen.min)} – ${jolieDate(fen.max)} dépassée</div>
           ${profil}
         </section>`;
     }
-    const fourchette = fen && fen.recalee ? `${jolieDate(fen.min)} – ${jolieDate(fen.max)}` : plan;
+    const fourchette = fen ? `${jolieDate(fen.min)} – ${jolieDate(fen.max)}` : plan;
     return `
       <section class="bloc">
         <div class="bloc-label">${label}</div>
         <div class="gros vert">${fourchette}</div>
-        <div class="info">Barrière ${joli(seg.barriere)}${fen && fen.recalee ? " · recalée sur ton départ (plan " + plan + ")" : ""}</div>
+        <div class="info">Barrière ${joli(seg.barriere)}${fen && fen.recalee ? " · plan initial " + plan : ""}</div>
         ${profil}
       </section>`;
   }
@@ -282,7 +278,7 @@
              <div class="compte" id="compte"></div>`
           : `<div class="sous-titre">${echapper(capitaliser(jour))} · dans <span id="compte"></span></div>`}
       </header>
-      ${blocArrivee(seg, true)}
+      ${blocArrivee(seg, true, fenetreArrivee(0, dateDepart(), maintenant()))}
       ${blocConsignes(seg)}
       ${blocNutrition(1)}
       <div class="espace"></div>
