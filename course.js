@@ -106,15 +106,17 @@ const COURSE = {
   nutritionReserve: "réserve : 1 gel + 1 compote",   // H13 et au-delà
 
   // Col Saint-Roch : objectif proposé selon l'heure de DÉPART du col
-  // "jusqua" = dernière minute incluse
+  // "jusqua" = dernière minute incluse (pour un départ à 5h30 ; décalé
+  // automatiquement si le départ réel est décalé)
+  // "duree" = temps total visé (Sub 10h30 -> "10:30")
   objectifsCol: [
-    { jusqua: "11:43", objectif: "Sub 9h",    texte: "jouable en accélérant", arriveeVisee: "14:30" },
-    { jusqua: "11:55", objectif: "Sub 9h",    texte: "à la limite : tout donner", arriveeVisee: "14:30" },
-    { jusqua: "12:25", objectif: "Sub 9h30",  texte: "jouable", arriveeVisee: "15:00" },
-    { jusqua: "12:55", objectif: "Sub 10h",   texte: "jouable", arriveeVisee: "15:30" },
-    { jusqua: "13:25", objectif: "Sub 10h30", texte: "jouable", arriveeVisee: "16:00" },
-    { jusqua: "13:55", objectif: "Sub 11h",   texte: "jouable", arriveeVisee: "16:30" },
-    { jusqua: "23:59", objectif: "Finir en contrôle", texte: "", arriveeVisee: null },
+    { jusqua: "11:43", objectif: "Sub 9h",    texte: "jouable en accélérant",     duree: "9:00" },
+    { jusqua: "11:55", objectif: "Sub 9h",    texte: "à la limite : tout donner", duree: "9:00" },
+    { jusqua: "12:25", objectif: "Sub 9h30",  texte: "jouable",                   duree: "9:30" },
+    { jusqua: "12:55", objectif: "Sub 10h",   texte: "jouable",                   duree: "10:00" },
+    { jusqua: "13:25", objectif: "Sub 10h30", texte: "jouable",                   duree: "10:30" },
+    { jusqua: "13:55", objectif: "Sub 11h",   texte: "jouable",                   duree: "11:00" },
+    { jusqua: "23:59", objectif: "Finir en contrôle", texte: "",                  duree: null },
   ],
   minutesFerionAvantArrivee: 45,   // « Férion avant HhMM » = arrivée visée − 45 min
 

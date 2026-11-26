@@ -16,6 +16,7 @@
   const app = document.getElementById("app");
   const NB_LIEUX = COURSE.lieux.length - 1;     // 5 arrivées de segment
   const IDX_SAINT_ROCH = COURSE.lieux.findIndex((l) => l.id === "saint-roch");
+  const IDX_FERION = COURSE.lieux.findIndex((l) => l.id === "ferion");
 
   // ---------- Petits outils de stockage ----------
   function lireJSON(cle) {
@@ -147,6 +148,7 @@
       if (p.ressenti && p.ressenti.douleur === 3) return { ecran: "alerte", lieu: k };  // prioritaire sur tout
       return { ecran: p.ressentiFini ? "ravito" : "ressenti", lieu: k };
     }
+    if (k === IDX_SAINT_ROCH && p.depart && !p.decision) return { ecran: "col", lieu: k };
     return { ecran: "segment", seg: k };
   }
 
@@ -224,6 +226,53 @@
     return liste;
   }
 
+  // ---------- 4.3 Col Saint-Roch : objectif proposé ----------
+  // Les heures du tableau sont prévues pour un départ à 5h30 : on les décale
+  // si le départ réel a été décalé.
+  function decalageDepartMs() {
+    return dateDepart() - dateDuJour(COURSE.heureDepart);
+  }
+  function ligneObjectif(idx) {
+    const table = COURSE.objectifsCol;
+    const l = table[Math.min(idx, table.length - 1)];
+    if (!l.duree) return { idx: idx, finir: true, objectif: l.objectif, texte: l.texte };
+    const arrivee = new Date(dateDepart().getTime() + dureeEnMs(l.duree));
+    const limite = new Date(arrivee.getTime() - COURSE.minutesFerionAvantArrivee * 60000);
+    return {
+      idx: idx, finir: false, objectif: l.objectif, texte: l.texte,
+      arriveeVisee: arrivee.toISOString(), limiteFerion: limite.toISOString(),
+    };
+  }
+  // Objectif suivant (+30 min) : première ligne avec un temps visé plus long
+  function ligneSuivante(idx) {
+    const table = COURSE.objectifsCol;
+    const actuelle = table[idx].duree;
+    for (let j = idx + 1; j < table.length; j++) {
+      if (!table[j].duree || table[j].duree !== actuelle) return ligneObjectif(j);
+    }
+    return ligneObjectif(table.length - 1);
+  }
+  // 🟢 (ou ressenti passé) -> ligne du tableau ; 🟡 -> ligne suivante ; 🔴 -> finir
+  function proposerObjectif(depart, niveau) {
+    if (niveau === 3) return { finir: true, objectif: "Finir en contrôle", texte: "", raison: "etat" };
+    const t = new Date(depart.getTime() - decalageDepartMs());
+    const minutes = t.getHours() * 60 + t.getMinutes();
+    let idx = COURSE.objectifsCol.findIndex((l) => minutes <= hhmmEnMinutes(l.jusqua));
+    if (idx < 0) idx = COURSE.objectifsCol.length - 1;
+    if (niveau === 2) idx = Math.min(idx + 1, COURSE.objectifsCol.length - 1);
+    const o = ligneObjectif(idx);
+    if (o.finir) o.raison = "chrono";
+    return o;
+  }
+  function sub(o) {                           // "Sub 10h30" -> "sub 10h30"
+    return o.objectif.replace(/^Sub/, "sub");
+  }
+  // Objectif choisi au col (null si refusé / finir / col sauté)
+  function objectifChoisiAuCol() {
+    const sr = etat.passages[IDX_SAINT_ROCH];
+    return sr && sr.decision === "go" && sr.objectif && !sr.objectif.finir ? sr.objectif : null;
+  }
+
   // ---------- Calcul des flasques et sachets au ravito ----------
   function prepareesAuDepart(impair) {
     const limite = dateDuJour(COURSE.segments[0].arriveeMax);
@@ -271,7 +320,7 @@
   }
 
   // ---------- Morceaux d'écran réutilisables ----------
-  function blocArrivee(seg, avecProfil, fen, labelDebut) {
+  function blocArrivee(seg, avecProfil, fen, labelDebut, extra) {
     const label = (labelDebut || seg.id) + " · Arrivée " + echapper(seg.a);
     const profil = avecProfil ? `<div class="info">${km(seg.distance)} km · +${metres(seg.dPlus)} m · −${metres(seg.dMoins)} m</div>` : "";
     const plan = `${joli(seg.arriveeMin)} – ${joli(seg.arriveeMax)}`;
@@ -285,6 +334,7 @@
           <div class="gros ${serre ? "rouge" : "orange"}">Barrière ${joli(seg.barriere)}</div>
           <div class="consigne">${marge}${serre ? " · cours les replats, mange en marchant" : " · avance régulièrement"}</div>
           <div class="info">Fourchette ${jolieDate(fen.min)} – ${jolieDate(fen.max)} dépassée</div>
+          ${extra || ""}
           ${profil}
         </section>`;
     }
@@ -297,13 +347,20 @@
         <div class="bloc-label">${label}</div>
         <div class="gros vert">${fourchette}</div>
         <div class="info">Barrière ${joli(seg.barriere)}${notes.length ? " · " + notes.join(" · ") : ""}</div>
+        ${extra || ""}
         ${profil}
       </section>`;
   }
 
-  function blocConsignes(seg, tropVite) {
+  function blocConsignes(seg, tropVite, objectif) {
     let bpmAffiche = seg.bpmTexte ? "BPM " + seg.bpmTexte : "BPM " + seg.bpm;
     let note = seg.bpmNote;
+    if (objectif && seg.bpmObjectif) {
+      bpmAffiche = "BPM " + seg.bpmObjectif;
+      note = "objectif " + sub(objectif);
+    } else if (seg.bpmObjectif) {
+      note = "";                              // pas d'objectif : on n'affiche pas le 172
+    }
     if (tropVite && !seg.bpmTexte) {
       bpmAffiche = "BPM " + (seg.bpm - 5);
       note = "−5 : tu vas trop vite";
@@ -379,8 +436,8 @@
           <div class="horloge" id="horloge"></div>
         </div>
       </header>
-      ${blocArrivee(seg, false, fenetreArrivee(i, departDuSegment(i), n))}
-      ${blocConsignes(seg, tropVite)}
+      ${blocSegmentArrivee(i, n)}
+      ${blocConsignes(seg, tropVite, i === IDX_SAINT_ROCH ? objectifChoisiAuCol() : null)}
       ${blocNutrition(heureDeCourse(n))}
       <div class="espace"></div>
       <div class="noter">
@@ -391,6 +448,30 @@
       </div>
       ${correctionPossible ? `<button class="btn" data-action="corriger">Départ décalé ? Corriger l'heure</button>` : ""}
       <button class="btn btn-principal" data-action="arrive">J'arrive ${echapper(lieuFin.au)}</button>`;
+  }
+
+  function blocSegmentArrivee(i, n) {
+    const seg = COURSE.segments[i];
+    const fen = fenetreArrivee(i, departDuSegment(i), n);
+    // S4 avec objectif : l'heure-limite au Férion devient le gros chiffre
+    const obj = i === IDX_SAINT_ROCH ? objectifChoisiAuCol() : null;
+    if (obj) {
+      const limite = new Date(obj.limiteFerion);
+      const rate = n > limite;
+      return `
+        <section class="bloc">
+          <div class="bloc-label">${seg.id} · Pour le ${echapper(sub(obj))} : Férion avant</div>
+          <div class="gros ${rate ? "orange" : "violet"}">${jolieDate(limite)}</div>
+          ${rate ? `<div class="consigne">Limite dépassée : continue, on fait le point au Férion</div>` : ""}
+          <div class="info">Barrière ${joli(seg.barriere)}</div>
+        </section>`;
+    }
+    // S5 : rappel de l'objectif décidé au Férion
+    const fe = i === IDX_FERION ? etat.passages[IDX_FERION] : null;
+    const extra = fe && fe.objectifFerion && !fe.objectifFerion.finir
+      ? `<div class="ligne-objectif">Objectif ${echapper(sub(fe.objectifFerion))} : arrivée avant ${jolieDate(new Date(fe.objectifFerion.arriveeVisee))}</div>`
+      : "";
+    return blocArrivee(seg, false, fen, null, extra);
   }
 
   const QUESTIONS = [
@@ -481,9 +562,57 @@
         ${vides ? `<div class="info">${vides}</div>` : ""}
         ${conseils.map((x) => `<div class="conseil${x.fort ? " fort" : ""}">${echapper(x.texte)}</div>`).join("")}
       </section>
-      ${blocArrivee(segSuivant, true, fenetreArrivee(k, maintenant(), maintenant()), "Ensuite · " + segSuivant.id)}
+      ${blocArrivee(segSuivant, true, fenetreArrivee(k, maintenant(), maintenant()), "Ensuite · " + segSuivant.id, bilanFerion(p))}
       <div class="espace"></div>
       <button class="btn btn-principal" data-action="repars">Je repars</button>`;
+  }
+
+  // Au Férion : « Objectif tenu » ou objectif suivant (+30 min)
+  function bilanFerion(p) {
+    const o = p.objectifFerion;
+    if (!o) return "";
+    if (o.resultat === "tenu") {
+      return `<div class="ligne-objectif">Objectif tenu : 45 min pour aller au bout · ${echapper(sub(o))} avant ${jolieDate(new Date(o.arriveeVisee))}</div>`;
+    }
+    if (o.finir) return `<div class="ligne-objectif">Objectif manqué : finis en contrôle</div>`;
+    return `<div class="ligne-objectif">Nouvel objectif : ${echapper(sub(o))} · arrivée avant ${jolieDate(new Date(o.arriveeVisee))}</div>`;
+  }
+
+  // 5. Col Saint-Roch : écran de décision (seul endroit où un objectif chrono apparaît)
+  function dessinerCol(k) {
+    const p = etat.passages[k];
+    const depart = new Date(p.depart);
+    const seg = COURSE.segments[k];           // S4
+    const o = proposerObjectif(depart, niveauEtat(p));
+    const entete = `
+      <header class="entete">
+        <div class="entete-ligne">
+          <div class="surtitre">Col Saint-Roch · départ ${jolieDate(depart)}</div>
+          <div class="horloge" id="horloge"></div>
+        </div>`;
+    if (o.finir) {
+      const raison = o.raison === "etat" ? "État 🔴 : pas d'objectif chrono" : "Trop tard pour un objectif chrono";
+      return entete + `
+          <h1 class="titre">Finir en contrôle</h1>
+          <div class="sous-titre">${raison}</div>
+        </header>
+        ${blocConsignes(seg, false, null)}
+        <div class="espace"></div>
+        <button class="btn btn-principal" data-action="col-finir">C'est parti</button>`;
+    }
+    const limite = new Date(o.limiteFerion);
+    return entete + `
+        <h1 class="titre-moyen">Objectif proposé : ${echapper(o.objectif)}</h1>
+        ${o.texte ? `<div class="sous-titre violet">${echapper(capitaliser(o.texte))}</div>` : ""}
+      </header>
+      <section class="bloc bloc-objectif">
+        <div class="bloc-label">Pour le ${echapper(sub(o))} : Férion avant</div>
+        <div class="gros violet">${jolieDate(limite)}</div>
+      </section>
+      ${blocConsignes(seg, false, o)}
+      <div class="espace"></div>
+      <button class="btn btn-principal btn-objectif" data-action="col-go">Go pour le ${echapper(sub(o))}</button>
+      <button class="btn" data-action="col-non">Non, je finis tranquille</button>`;
   }
 
   // 6. Alerte douleur vive : écran rouge plein, prioritaire sur tout.
@@ -609,7 +738,7 @@
     const ph = phase();
     const ecran = ecranForce || ph.ecran;
     const signature = [ecran, ph.seg, ph.lieu, heureDeCourse(n),
-      ecran === "ravito" || ecran === "segment" ? Math.floor(n / 60000) : ""].join("|");
+      ecran === "ravito" || ecran === "segment" || ecran === "col" ? Math.floor(n / 60000) : ""].join("|");
     if (forcer || signature !== signatureAffichee) {
       if (ecranPrecedent === "avant" && ph.ecran === "segment") {
         noterEvenement("départ", "course démarrée à " + joli(heureDepartActuelle()));
@@ -625,6 +754,7 @@
       else if (ecran === "segment") html = dessinerSegment(ph.seg);
       else if (ecran === "ressenti") html = dessinerRessenti(ph.lieu);
       else if (ecran === "alerte") html = dessinerAlerte(ph.lieu);
+      else if (ecran === "col") html = dessinerCol(ph.lieu);
       else if (ecran === "ravito") html = dessinerRavito(ph.lieu);
       else html = dessinerArrivee();
       document.body.classList.toggle("fond-alerte", ecran === "alerte");
@@ -641,6 +771,13 @@
       arrivee: n.toISOString(), depart: null, ressenti: {},
       ressentiFini: k === NB_LIEUX, ressentiPasse: false,
     }, s);
+    const obj = objectifChoisiAuCol();
+    if (k === IDX_FERION && obj) {
+      const tenu = n <= new Date(obj.limiteFerion);
+      const o = tenu ? obj : ligneSuivante(obj.idx);
+      etat.passages[k].objectifFerion = Object.assign({}, o, { resultat: tenu ? "tenu" : "suivant" });
+      noterEvenement("objectif au Férion", tenu ? "tenu : " + obj.objectif : "nouvel objectif : " + o.objectif);
+    }
     noterEvenement("j'arrive", COURSE.lieux[k].nom + " · " + STATUTS[s.statut].titre + (viaRecalage ? " (recalage)" : ""));
   }
 
@@ -742,6 +879,18 @@
           etat.preparees.sachets = etat.preparees.sachets.concat(calculAffiche.sachets);
         }
         noterEvenement("je repars", COURSE.lieux[ph.lieu].nom);
+        break;
+      }
+
+      // --- Col Saint-Roch ---
+      case "col-go":
+      case "col-non":
+      case "col-finir": {
+        const p = etat.passages[ph.lieu];
+        const o = proposerObjectif(new Date(p.depart), niveauEtat(p));
+        p.objectif = o;
+        p.decision = action === "col-go" ? "go" : action === "col-non" ? "non" : "finir";
+        noterEvenement("décision au col", o.objectif + " · " + (p.decision === "go" ? "go" : p.decision === "non" ? "je finis tranquille" : "finir en contrôle"));
         break;
       }
 

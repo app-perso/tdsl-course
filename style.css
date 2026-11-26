@@ -192,3 +192,10 @@ body.fond-alerte, body.fond-alerte #app { background: var(--alerte); }
 .btn-gros { min-height: 72px; font-size: 22px; font-weight: 800; color: var(--texte); background: var(--carte); }
 /* La fourchette tient toujours sur une ligne */
 .gros { white-space: nowrap; font-size: clamp(30px, 10.5vw, 44px); }
+
+/* ---------- Étape 4 : objectif (col Saint-Roch / Férion) ---------- */
+.violet { color: var(--objectif); }
+.sous-titre.violet { color: #B3A8FF; }
+.bloc-objectif { border: 2px solid var(--objectif); }
+.btn-objectif { background: var(--objectif); color: #FFFFFF; }
+.ligne-objectif { font-size: 18px; font-weight: 800; color: #B3A8FF; line-height: 1.3; }
