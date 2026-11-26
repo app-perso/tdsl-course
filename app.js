@@ -160,14 +160,41 @@
     }
     return liste;
   }
+  // ---------- Fourchette d'arrivée au ravito suivant ----------
+  // Plan initial, sauf si on est parti en retard : alors on recale sur l'heure
+  // de départ réelle + temps de segment (max +15 %), sans dépasser la barrière.
+  function departDuSegment(i) {
+    if (i === 0) return dateDepart();
+    const p = etat.passages[i];
+    return p && p.depart ? new Date(p.depart) : maintenant();
+  }
+  function fenetreArrivee(i, depart, n) {
+    const seg = COURSE.segments[i];
+    const planMin = dateDuJour(seg.arriveeMin);
+    const planMax = dateDuJour(seg.arriveeMax);
+    const barriere = dateDuJour(seg.barriere);
+    const recalMax = new Date(depart.getTime() + dureeEnMs(seg.tempsMax));
+    let min = planMin, max = planMax, recalee = false;
+    if (recalMax > planMax) {
+      recalee = true;
+      const recalMin = new Date(depart.getTime() + dureeEnMs(seg.tempsMin));
+      min = recalMin > planMin ? recalMin : planMin;
+      max = new Date(depart.getTime() + dureeEnMs(seg.tempsMax) * 1.15);
+      if (max > barriere) max = barriere;
+      if (min > max) min = max;
+    }
+    return {
+      min: min, max: max, recalee: recalee, barriere: barriere,
+      depassee: n > max,
+      margeMin: Math.round((barriere - n) / 60000),
+    };
+  }
+
   function calculRavito(k) {
     const n = maintenant();
-    const segSuivant = COURSE.segments[k];
     // Intervalle : de maintenant à l'heure max d'arrivée au ravito suivant
-    // (si elle est déjà dépassée : maintenant + temps max du segment)
-    const finMax = dateDuJour(segSuivant.arriveeMax);
-    const finSecours = new Date(n.getTime() + dureeEnMs(segSuivant.tempsMax));
-    const fin = finMax > finSecours ? finMax : finSecours;
+    // (recalée si on repart en retard)
+    const fin = fenetreArrivee(k, n, n).max;
 
     const estFerion = COURSE.lieux[k].id === "ferion";
     const total = estFerion && !COURSE.reglages.reserveExigeeAuFerion ? 2 : COURSE.reglages.flasquesParDefaut;
@@ -177,13 +204,31 @@
   }
 
   // ---------- Morceaux d'écran réutilisables ----------
-  function blocArrivee(seg, avecProfil) {
+  function blocArrivee(seg, avecProfil, fen, labelDebut) {
+    const label = (labelDebut || seg.id) + " · Arrivée " + echapper(seg.a);
+    const profil = avecProfil ? `<div class="info">${km(seg.distance)} km · +${metres(seg.dPlus)} m · −${metres(seg.dMoins)} m</div>` : "";
+    const plan = `${joli(seg.arriveeMin)} – ${joli(seg.arriveeMax)}`;
+
+    // Fourchette dépassée : on n'affiche plus d'horaire périmé, on montre la barrière
+    if (fen && fen.depassee) {
+      const serre = fen.margeMin < COURSE.reglages.margeBarriereMin;
+      const marge = fen.margeMin > 0 ? "Encore " + jolieDuree(fen.margeMin * 60000) : "Barrière passée";
+      return `
+        <section class="bloc">
+          <div class="bloc-label">${label}</div>
+          <div class="gros ${serre ? "rouge" : "orange"}">Barrière ${joli(seg.barriere)}</div>
+          <div class="consigne">${marge}${serre ? " · cours les replats, mange en marchant" : " · avance régulièrement"}</div>
+          <div class="info">Fourchette ${fen.recalee ? jolieDate(fen.min) + " – " + jolieDate(fen.max) : plan} dépassée</div>
+          ${profil}
+        </section>`;
+    }
+    const fourchette = fen && fen.recalee ? `${jolieDate(fen.min)} – ${jolieDate(fen.max)}` : plan;
     return `
       <section class="bloc">
-        <div class="bloc-label">${seg.id} · Arrivée ${echapper(seg.a)}</div>
-        <div class="gros vert">${joli(seg.arriveeMin)} – ${joli(seg.arriveeMax)}</div>
-        <div class="info">Barrière ${joli(seg.barriere)}</div>
-        ${avecProfil ? `<div class="info">${km(seg.distance)} km · +${metres(seg.dPlus)} m · −${metres(seg.dMoins)} m</div>` : ""}
+        <div class="bloc-label">${label}</div>
+        <div class="gros vert">${fourchette}</div>
+        <div class="info">Barrière ${joli(seg.barriere)}${fen && fen.recalee ? " · recalée sur ton départ (plan " + plan + ")" : ""}</div>
+        ${profil}
       </section>`;
   }
 
@@ -258,7 +303,7 @@
           <div class="horloge" id="horloge"></div>
         </div>
       </header>
-      ${blocArrivee(seg, false)}
+      ${blocArrivee(seg, false, fenetreArrivee(i, departDuSegment(i), n))}
       ${blocConsignes(seg)}
       ${blocNutrition(heureDeCourse(n))}
       <div class="espace"></div>
@@ -337,12 +382,7 @@
         ${sachets ? `<div class="consigne">${sachets}</div>` : ""}
         ${vides ? `<div class="info">${vides}</div>` : ""}
       </section>
-      <section class="bloc">
-        <div class="bloc-label">Ensuite · ${segSuivant.id} · ${echapper(segSuivant.de)} → ${echapper(segSuivant.a)}</div>
-        <div class="gros vert">${joli(segSuivant.arriveeMin)} – ${joli(segSuivant.arriveeMax)}</div>
-        <div class="info">Arrivée ${echapper(segSuivant.a)} · barrière ${joli(segSuivant.barriere)}</div>
-        <div class="info">${km(segSuivant.distance)} km · +${metres(segSuivant.dPlus)} m · −${metres(segSuivant.dMoins)} m</div>
-      </section>
+      ${blocArrivee(segSuivant, true, fenetreArrivee(k, maintenant(), maintenant()), "Ensuite · " + segSuivant.id)}
       <div class="espace"></div>
       <button class="btn btn-principal" data-action="repars">Je repars</button>`;
   }
