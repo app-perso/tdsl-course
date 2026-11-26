@@ -1,0 +1,115 @@
+/* Police Archivo, stockée dans l'appli (marche sans réseau) */
+@font-face {
+  font-family: "Archivo";
+  src: url("fonts/archivo-latin.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --fond: #0E0C1F;
+  --carte: #1A1730;
+  --texte: #FFFFFF;
+  --label: #A9A4C7;
+  --doux: #CFCBE6;
+  --vert: #1FC8A5;
+  --bpm: #FF7A6B;
+  --nutrition: #B3A8FF;
+  --objectif: #7A6BFF;
+  --alerte: #8E1F2B;
+  --orange: #FFB36B;
+  --bord: #3A3560;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--fond);
+  color: var(--texte);
+  font-family: "Archivo", -apple-system, system-ui, sans-serif;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+#app {
+  min-height: 100vh;
+  min-height: 100dvh;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: calc(env(safe-area-inset-top) + 20px) 16px calc(env(safe-area-inset-bottom) + 20px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ---------- En-tête ---------- */
+.entete { display: flex; flex-direction: column; gap: 4px; }
+.entete-ligne { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.surtitre { font-size: 14px; font-weight: 600; color: var(--label); letter-spacing: 1px; text-transform: uppercase; }
+.titre { font-size: 40px; font-weight: 900; line-height: 1; margin: 0; }
+.titre-seg { font-size: 22px; font-weight: 800; margin: 0; }
+.horloge { font-size: 17px; font-weight: 600; color: var(--label); font-variant-numeric: tabular-nums; }
+.sous-titre { font-size: 18px; font-weight: 600; color: var(--vert); }
+.compte { font-size: 64px; font-weight: 900; line-height: 1; color: var(--vert); font-variant-numeric: tabular-nums; }
+
+/* ---------- Blocs (3 max par écran) ---------- */
+.bloc {
+  background: var(--carte);
+  border-radius: 20px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bloc-label { font-size: 13px; font-weight: 600; color: var(--label); letter-spacing: 1px; text-transform: uppercase; }
+.bloc-ligne { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.gros { font-size: 44px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
+.vert { color: var(--vert); }
+.info { font-size: 16px; color: var(--doux); }
+.bpm { font-size: 32px; font-weight: 900; color: var(--bpm); white-space: nowrap; }
+.bpm-note { font-size: 14px; color: var(--bpm); text-align: right; }
+.consigne { font-size: 19px; font-weight: 600; line-height: 1.3; }
+.nutri-h { font-size: 28px; font-weight: 900; color: var(--nutrition); }
+.nutri-txt { font-size: 21px; font-weight: 600; line-height: 1.3; }
+
+.espace { flex-grow: 1; }
+
+/* ---------- Boutons : 64 px mini, utilisables avec des gants ---------- */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+.btn {
+  min-height: 64px;
+  width: 100%;
+  border-radius: 18px;
+  border: 2px solid var(--bord);
+  background: transparent;
+  color: var(--doux);
+  font-size: 18px;
+  font-weight: 700;
+  padding: 10px 16px;
+}
+.btn-principal {
+  min-height: 76px;
+  border: none;
+  background: var(--vert);
+  color: var(--fond);
+  font-size: 23px;
+  font-weight: 900;
+}
+.btn:active { transform: scale(0.98); opacity: 0.85; }
+
+/* ---------- Écran correction d'heure ---------- */
+.reglage-heure { font-size: 88px; font-weight: 900; text-align: center; line-height: 1; font-variant-numeric: tabular-nums; color: var(--vert); }
+.grille-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.grille-4 .btn { font-size: 22px; padding: 0; }
+.deux-btn { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.discret { font-size: 14px; color: var(--label); text-align: center; }
