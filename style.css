@@ -167,3 +167,28 @@ body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none
 }
 .orange { color: var(--orange); }
 .rouge { color: var(--bpm); }
+
+/* ---------- Étape 3 : statut, conseils, alerte, recalage ---------- */
+.titre-moyen { font-size: 32px; font-weight: 900; line-height: 1.05; margin: 4px 0 0; }
+.statut { border-radius: 16px; padding: 12px 16px; display: flex; flex-direction: column; gap: 4px; }
+.statut-ligne { display: flex; justify-content: space-between; align-items: center; font-size: 22px; font-weight: 900; }
+.statut-sous { font-size: 16px; font-weight: 700; }
+.statut-avance   { background: var(--objectif); color: #FFFFFF; }
+.statut-plan     { background: var(--vert); color: var(--fond); }
+.statut-lent     { background: var(--orange); color: var(--fond); }
+.statut-barriere { background: var(--alerte); color: #FFFFFF; border: 2px solid var(--bpm); }
+
+.conseil { font-size: 18px; font-weight: 700; line-height: 1.3; color: var(--orange); }
+.conseil.fort { color: var(--bpm); }
+
+body.fond-alerte, body.fond-alerte #app { background: var(--alerte); }
+.alerte-plein { display: flex; flex-direction: column; gap: 18px; flex-grow: 1; }
+.alerte-plein .titre { font-size: 40px; line-height: 1.1; }
+.surtitre.clair { color: #FFD9DD; }
+.alerte-lieu { font-size: 30px; font-weight: 900; }
+.alerte-txt { font-size: 26px; font-weight: 800; }
+.btn-blanc { border-color: #FFFFFF; color: #FFFFFF; }
+
+.btn-gros { min-height: 72px; font-size: 22px; font-weight: 800; color: var(--texte); background: var(--carte); }
+/* La fourchette tient toujours sur une ligne */
+.gros { white-space: nowrap; font-size: clamp(30px, 10.5vw, 44px); }

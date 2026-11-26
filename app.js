@@ -2,7 +2,9 @@
 //  APPLI DE COURSE TDSL — logique
 //  Étape 1 : Avant le départ, compte à rebours, correction d'heure.
 //  Étape 2 : écrans Segment / Ressenti / Ravito, nutrition par heure,
-//            calcul des flasques, mode test simple (appui long sur le titre).
+//            flasques, fourchettes en direct, mode test simple.
+//  Étape 3 : statut chrono, état (ressenti), conseils, alerte douleur
+//            vive, recalage « Tu es à quel ravito ? ».
 // =====================================================================
 
 (function () {
@@ -13,6 +15,7 @@
   const CLE_MODE_TEST = "tdsl-course-mode-test";
   const app = document.getElementById("app");
   const NB_LIEUX = COURSE.lieux.length - 1;     // 5 arrivées de segment
+  const IDX_SAINT_ROCH = COURSE.lieux.findIndex((l) => l.id === "saint-roch");
 
   // ---------- Petits outils de stockage ----------
   function lireJSON(cle) {
@@ -32,12 +35,15 @@
   }
 
   // ---------- Sauvegarde : tout est écrit à chaque appui ----------
+  // passages[1..5] = { arrivee, depart, ressenti:{}, ressentiFini, ressentiPasse,
+  //                    statut, margeBarriere, fenMin, fenMax, recale }
   function etatVide() {
     return {
-      heureDepartCorrigee: null,   // "HH:MM" si le départ a été décalé
+      heureDepartCorrigee: null,
       compteAReboursLance: false,
-      passages: {},                // 1..5 : { arrivee, depart, ressenti:{}, ressentiFini, ressentiPasse }
-      preparees: { iso: [], sachets: [] },   // heures déjà préparées aux ravitos
+      passages: {},
+      preparees: { iso: [], sachets: [] },
+      recalageIgnoreJusqua: null,
       evenements: [],              // { heure: ISO, type, detail }
     };
   }
@@ -91,8 +97,7 @@
     return t.charAt(0).toUpperCase() + t.slice(1);
   }
 
-  // Une heure "HH:MM" le jour de la course -> Date
-  function dateDuJour(hhmm) {
+  function dateDuJour(hhmm) {                 // "HH:MM" le jour de la course -> Date
     const [a, mo, j] = COURSE.dateDepart.split("-").map(Number);
     const [h, mi] = hhmm.split(":").map(Number);
     return new Date(a, mo - 1, j, h, mi, 0, 0);
@@ -109,8 +114,7 @@
   }
 
   // ---------- Nutrition : dépend uniquement de l'heure de course ----------
-  // Départ 5h30 : à 8h50 -> H4. Avant le départ -> H1.
-  function heureDeCourse(d) {
+  function heureDeCourse(d) {                 // départ 5h30 : à 8h50 -> H4
     const ms = d - dateDepart();
     if (ms < 0) return 1;
     return Math.floor(ms / 3600000) + 1;
@@ -118,14 +122,17 @@
   function nutritionPour(h) {
     return COURSE.nutrition[h] || COURSE.nutritionReserve;
   }
-  function debutHeure(h) {                    // début de l'heure de course Hh
+  function debutHeure(h) {
     return new Date(dateDepart().getTime() + (h - 1) * 3600000);
   }
 
   // ---------- Où en est la course ? ----------
+  function estPasse(p) {                      // lieu atteint (ou sauté lors d'un recalage)
+    return p && (p.arrivee || p.recale);
+  }
   function dernierLieuAtteint() {
     let k = 0;
-    for (let i = 1; i <= NB_LIEUX; i++) if (etat.passages[i] && etat.passages[i].arrivee) k = i;
+    for (let i = 1; i <= NB_LIEUX; i++) if (estPasse(etat.passages[i])) k = i;
     return k;
   }
   function phase() {
@@ -134,69 +141,133 @@
       if (maintenant() < dateDepart()) return { ecran: "avant" };
       return { ecran: "segment", seg: 0 };
     }
-    if (k === NB_LIEUX) return { ecran: "arrivee" };
     const p = etat.passages[k];
-    if (!p.depart) return { ecran: p.ressentiFini ? "ravito" : "ressenti", lieu: k };
+    if (k === NB_LIEUX && p.arrivee) return { ecran: "arrivee" };
+    if (p.arrivee && !p.depart && !p.recale) {
+      if (p.ressenti && p.ressenti.douleur === 3) return { ecran: "alerte", lieu: k };  // prioritaire sur tout
+      return { ecran: p.ressentiFini ? "ravito" : "ressenti", lieu: k };
+    }
     return { ecran: "segment", seg: k };
   }
 
-  // ---------- Calcul des flasques et sachets au ravito ----------
-  // Au départ, on part avec ce qu'il faut jusqu'à l'heure max d'arrivée au 1er ravito.
-  function prepareesAuDepart(impair) {
-    const limite = dateDuJour(COURSE.segments[0].arriveeMax);
-    const liste = [];
-    for (let h = 1; h <= 12; h++) if ((h % 2 === 1) === impair && debutHeure(h) <= limite) liste.push(h);
-    return liste;
-  }
-  // Heures (impaires = ISO, paires = sachets) qui commencent avant "fin" et pas encore préparées
-  function heuresAPreparer(impair, n, fin) {
-    const deja = new Set(prepareesAuDepart(impair).concat(impair ? etat.preparees.iso : etat.preparees.sachets));
-    const liste = [];
-    for (let h = 1; h <= 12; h++) {
-      if ((h % 2 === 1) !== impair || deja.has(h)) continue;
-      const debut = debutHeure(h);
-      // on ignore une heure commencée depuis plus d'1 h (trop tard pour la préparer)
-      if (debut <= fin && debut > new Date(n.getTime() - 3600000)) liste.push(h);
-    }
-    return liste;
-  }
   // ---------- Fourchette d'arrivée au ravito suivant ----------
-  // Toujours en direct : heure de départ réelle (course ou ravito) + temps min/max
-  // du segment, que tu sois en avance ou en retard. Jamais au-delà de la barrière.
+  // En direct : heure de départ réelle + temps min/max du segment (+15 % si
+  // « Plus lent que prévu » au ravito précédent). Jamais au-delà de la barrière.
+  // Départ inconnu (ravito sauté) : on reprend le plan.
   function departDuSegment(i) {
     if (i === 0) return dateDepart();
     const p = etat.passages[i];
-    return p && p.depart ? new Date(p.depart) : maintenant();
+    if (!p) return maintenant();
+    if (p.depart) return new Date(p.depart);
+    if (p.recale) return null;
+    return maintenant();                      // encore au ravito : « si tu repars maintenant »
   }
   function fenetreArrivee(i, depart, n) {
     const seg = COURSE.segments[i];
     const planMin = dateDuJour(seg.arriveeMin);
     const planMax = dateDuJour(seg.arriveeMax);
     const barriere = dateDuJour(seg.barriere);
-    let min = new Date(depart.getTime() + dureeEnMs(seg.tempsMin));
-    let max = new Date(depart.getTime() + dureeEnMs(seg.tempsMax));
+    const precedent = i > 0 ? etat.passages[i] : null;
+    const facteur = precedent && precedent.statut === "lent" ? 1.15 : 1;
+    let min, max;
+    if (depart) {
+      min = new Date(depart.getTime() + dureeEnMs(seg.tempsMin) * facteur);
+      max = new Date(depart.getTime() + dureeEnMs(seg.tempsMax) * facteur);
+    } else {
+      min = planMin; max = planMax;
+    }
     if (max > barriere) max = barriere;
     if (min > max) min = max;
-    // « recalée » = différente du plan initial d'au moins 1 min (on affiche alors le plan en petit)
     const recalee = Math.abs(min - planMin) >= 60000 || Math.abs(max - planMax) >= 60000;
     return {
-      min: min, max: max, recalee: recalee, barriere: barriere,
+      min: min, max: max, recalee: recalee, barriere: barriere, plus15: facteur > 1,
       depassee: n > max,
       margeMin: Math.round((barriere - n) / 60000),
     };
   }
 
+  // ---------- 4.1 Statut chrono (calculé à chaque arrivée) ----------
+  function calculerStatut(k, arrivee) {
+    const i = k - 1;
+    const seg = COURSE.segments[i];
+    const fen = fenetreArrivee(i, departDuSegment(i), arrivee);
+    const marge = Math.round((dateDuJour(seg.barriere) - arrivee) / 60000);
+    let statut;
+    if (marge < COURSE.reglages.margeBarriereMin) statut = "barriere";
+    else if (arrivee < fen.min) statut = "avance";
+    else if (arrivee <= fen.max) statut = "plan";
+    else statut = "lent";
+    return { statut: statut, margeBarriere: marge, fenMin: fen.min.toISOString(), fenMax: fen.max.toISOString() };
+  }
+  function dureeArret(k) {
+    const p = etat.passages[k];
+    if (p.statut === "barriere") return 2;
+    if (p.statut === "lent") return 10;
+    return COURSE.segments[k - 1].arretPrevu;
+  }
+
+  // ---------- 4.2 État selon le ressenti ----------
+  // 1 = vert, 2 = orange, 3 = rouge ; null si ressenti passé ou vide
+  function niveauEtat(p) {
+    if (!p || p.ressentiPasse || !p.ressenti) return null;
+    const v = Object.values(p.ressenti).filter((x) => x);
+    if (!v.length) return null;
+    return Math.max.apply(null, v);
+  }
+  // Conseils ajoutés, dans l'ordre de priorité (ventre avant moral avant douleur légère)
+  function conseilsRessenti(p) {
+    const r = (p && !p.ressentiPasse && p.ressenti) || {};
+    const liste = [];
+    if (r.ventre >= 2) liste.push({ fort: r.ventre === 3, texte: "Eau plate, ralentis 15 min, pas de gel. Coca, soupe, salé au ravito." });
+    if (r.moral === 3) liste.push({ texte: "Un gel + 20 min de marche. Objectif : le prochain ravito." });
+    if (r.douleur === 2) liste.push({ texte: "Descentes plus lentes, surveille." });
+    return liste;
+  }
+
+  // ---------- Calcul des flasques et sachets au ravito ----------
+  function prepareesAuDepart(impair) {
+    const limite = dateDuJour(COURSE.segments[0].arriveeMax);
+    const liste = [];
+    for (let h = 1; h <= 12; h++) if ((h % 2 === 1) === impair && debutHeure(h) <= limite) liste.push(h);
+    return liste;
+  }
+  function heuresAPreparer(impair, n, fin) {
+    const deja = new Set(prepareesAuDepart(impair).concat(impair ? etat.preparees.iso : etat.preparees.sachets));
+    const liste = [];
+    for (let h = 1; h <= 12; h++) {
+      if ((h % 2 === 1) !== impair || deja.has(h)) continue;
+      const debut = debutHeure(h);
+      if (debut <= fin && debut > new Date(n.getTime() - 3600000)) liste.push(h);
+    }
+    return liste;
+  }
   function calculRavito(k) {
     const n = maintenant();
-    // Intervalle : de maintenant à l'heure max d'arrivée au ravito suivant
-    // (recalée si on repart en retard)
-    const fin = fenetreArrivee(k, n, n).max;
-
+    const fin = fenetreArrivee(k, n, n).max;  // de maintenant à l'heure max d'arrivée au suivant
     const estFerion = COURSE.lieux[k].id === "ferion";
     const total = estFerion && !COURSE.reglages.reserveExigeeAuFerion ? 2 : COURSE.reglages.flasquesParDefaut;
     const iso = heuresAPreparer(true, n, fin).slice(0, total);
     const sachets = heuresAPreparer(false, n, fin);
     return { total: total, iso: iso, eau: total - iso.length, sachets: sachets };
+  }
+
+  // ---------- Recalage : l'appli n'a pas été ouverte à un ravito ? ----------
+  function recalageSuspect() {
+    const n = maintenant();
+    if (etat.recalageIgnoreJusqua && n < new Date(etat.recalageIgnoreJusqua)) return false;
+    const ph = phase();
+    if (ph.ecran === "segment") {
+      // 30 min après la fin de la fourchette : tu as sans doute passé le ravito sans ouvrir l'appli
+      const fen = fenetreArrivee(ph.seg, departDuSegment(ph.seg), n);
+      return n - fen.max > 30 * 60000;
+    }
+    if (ph.ecran === "ravito" || ph.ecran === "ressenti") {
+      return n - new Date(etat.passages[ph.lieu].arrivee) > 30 * 60000;
+    }
+    return false;
+  }
+  function verifierRecalage() {
+    if (!ecranForce && recalageSuspect()) ecranForce = "recalage";
   }
 
   // ---------- Morceaux d'écran réutilisables ----------
@@ -205,7 +276,6 @@
     const profil = avecProfil ? `<div class="info">${km(seg.distance)} km · +${metres(seg.dPlus)} m · −${metres(seg.dMoins)} m</div>` : "";
     const plan = `${joli(seg.arriveeMin)} – ${joli(seg.arriveeMax)}`;
 
-    // Fourchette dépassée : on n'affiche plus d'horaire périmé, on montre la barrière
     if (fen && fen.depassee) {
       const serre = fen.margeMin < COURSE.reglages.margeBarriereMin;
       const marge = fen.margeMin > 0 ? "Encore " + jolieDuree(fen.margeMin * 60000) : "Barrière passée";
@@ -219,24 +289,32 @@
         </section>`;
     }
     const fourchette = fen ? `${jolieDate(fen.min)} – ${jolieDate(fen.max)}` : plan;
+    const notes = [];
+    if (fen && fen.plus15) notes.push("temps +15 %");
+    if (fen && fen.recalee) notes.push("plan initial " + plan);
     return `
       <section class="bloc">
         <div class="bloc-label">${label}</div>
         <div class="gros vert">${fourchette}</div>
-        <div class="info">Barrière ${joli(seg.barriere)}${fen && fen.recalee ? " · plan initial " + plan : ""}</div>
+        <div class="info">Barrière ${joli(seg.barriere)}${notes.length ? " · " + notes.join(" · ") : ""}</div>
         ${profil}
       </section>`;
   }
 
-  function blocConsignes(seg) {
-    const bpmAffiche = seg.bpmTexte ? "BPM " + seg.bpmTexte : "BPM " + seg.bpm;
+  function blocConsignes(seg, tropVite) {
+    let bpmAffiche = seg.bpmTexte ? "BPM " + seg.bpmTexte : "BPM " + seg.bpm;
+    let note = seg.bpmNote;
+    if (tropVite && !seg.bpmTexte) {
+      bpmAffiche = "BPM " + (seg.bpm - 5);
+      note = "−5 : tu vas trop vite";
+    }
     return `
       <section class="bloc">
         <div class="bloc-ligne">
           <div class="bloc-label">Consignes</div>
           <div>
             <div class="bpm">${echapper(bpmAffiche)}</div>
-            ${seg.bpmNote ? `<div class="bpm-note">${echapper(seg.bpmNote)}</div>` : ""}
+            ${note ? `<div class="bpm-note">${echapper(note)}</div>` : ""}
           </div>
         </div>
         ${seg.consignes.map((c) => `<div class="consigne">${echapper(c)}</div>`).join("")}
@@ -260,7 +338,7 @@
   }
 
   // ---------- Écrans ----------
-  let ecranForce = null;      // "correction" ou "test" quand on règle une heure
+  let ecranForce = null;      // "correction", "test" ou "recalage"
   let minutesEnReglage = null;
   let signatureAffichee = null;
   let calculAffiche = null;   // flasques affichées, enregistrées au « Je repars »
@@ -290,8 +368,10 @@
     const seg = COURSE.segments[i];
     const lieuFin = COURSE.lieux[i + 1];
     const n = maintenant();
-    // Pendant les 30 premières minutes, on peut encore corriger l'heure de départ
     const correctionPossible = i === 0 && n - dateDepart() < 30 * 60000;
+    // « Tu vas trop vite : BPM −5 » si en avance au ravito précédent (avant Saint-Roch)
+    const precedent = i > 0 ? etat.passages[i] : null;
+    const tropVite = !!(precedent && precedent.statut === "avance" && i < IDX_SAINT_ROCH);
     return `
       <header class="entete">
         <div class="entete-ligne">
@@ -300,7 +380,7 @@
         </div>
       </header>
       ${blocArrivee(seg, false, fenetreArrivee(i, departDuSegment(i), n))}
-      ${blocConsignes(seg)}
+      ${blocConsignes(seg, tropVite)}
       ${blocNutrition(heureDeCourse(n))}
       <div class="espace"></div>
       <div class="noter">
@@ -344,15 +424,33 @@
       <button class="btn" data-action="passer">Passer, je n'ai pas le temps</button>`;
   }
 
+  const STATUTS = {
+    avance:   { titre: "En avance",                 classe: "statut-avance" },
+    plan:     { titre: "Dans le plan",              classe: "statut-plan" },
+    lent:     { titre: "Plus lent que prévu",       classe: "statut-lent" },
+    barriere: { titre: "Course contre la barrière", classe: "statut-barriere" },
+  };
+  function sousTitreStatut(k, p) {
+    if (p.statut === "avance") return k < IDX_SAINT_ROCH ? "Tu vas trop vite : BPM −5" : "";
+    if (p.statut === "lent") return "Ravito de 10 min pour bien manger · temps visés +15 %";
+    if (p.statut === "barriere") return "Ravito 2 min · mange en marchant · cours les replats";
+    return "";
+  }
+
   function dessinerRavito(k) {
     const p = etat.passages[k];
     const lieu = COURSE.lieux[k];
-    const segArrive = COURSE.segments[k - 1];      // le segment qui vient de finir (arrêt prévu)
     const segSuivant = COURSE.segments[k];
     const arrivee = new Date(p.arrivee);
-    const reparsAvant = new Date(arrivee.getTime() + segArrive.arretPrevu * 60000);
+    const arret = dureeArret(k);
+    const reparsAvant = new Date(arrivee.getTime() + arret * 60000);
     const c = calculRavito(k);
     calculAffiche = c;
+
+    const st = STATUTS[p.statut] || STATUTS.plan;
+    const sous = sousTitreStatut(k, p);
+    const niveau = niveauEtat(p);
+    const pastille = niveau ? ["", "🟢", "🟡", "🔴"][niveau] : "";
 
     const detailIso = c.iso.length
       ? `${c.iso.length} ISO (poudre ${c.iso.map((h) => "H" + h).join(" + ")})` + (c.eau ? ` + ${c.eau} eau` : "")
@@ -361,15 +459,19 @@
       : c.sachets.length === 1 ? `Sachet H${c.sachets[0]} devant`
       : `Sachets ${c.sachets.slice(0, -1).map((h) => "H" + h).join(", ")} et H${c.sachets[c.sachets.length - 1]} devant`;
     const vides = c.total >= 4 ? "" : c.total === 3 ? "La 4e reste vide" : "La 3e et la 4e restent vides";
+    const conseils = conseilsRessenti(p);
 
     return `
       <header class="entete">
         <div class="entete-ligne">
-          <div class="surtitre">Ravito · ${echapper(lieu.court)}</div>
+          <div class="surtitre">Ravito · ${echapper(lieu.court)} · arrivé ${jolieDate(arrivee)}</div>
           <div class="horloge" id="horloge"></div>
         </div>
-        <h1 class="titre">Repars au plus tard à ${jolieDate(reparsAvant)}</h1>
-        <div class="info">Arrivé à ${jolieDate(arrivee)} · arrêt prévu ${segArrive.arretPrevu} min</div>
+        <div class="statut ${st.classe}">
+          <div class="statut-ligne"><span>${st.titre}</span><span>${pastille}</span></div>
+          ${sous ? `<div class="statut-sous">${sous}</div>` : ""}
+        </div>
+        <h1 class="titre-moyen">Repars au plus tard à ${jolieDate(reparsAvant)}</h1>
       </header>
       <section class="bloc">
         <div class="bloc-label">Au ravito</div>
@@ -377,10 +479,47 @@
         <div class="flasques-detail">${echapper(detailIso)}</div>
         ${sachets ? `<div class="consigne">${sachets}</div>` : ""}
         ${vides ? `<div class="info">${vides}</div>` : ""}
+        ${conseils.map((x) => `<div class="conseil${x.fort ? " fort" : ""}">${echapper(x.texte)}</div>`).join("")}
       </section>
       ${blocArrivee(segSuivant, true, fenetreArrivee(k, maintenant(), maintenant()), "Ensuite · " + segSuivant.id)}
       <div class="espace"></div>
       <button class="btn btn-principal" data-action="repars">Je repars</button>`;
+  }
+
+  // 6. Alerte douleur vive : écran rouge plein, prioritaire sur tout.
+  // Le ressenti se remplit AU ravito : le « prochain ravito » est donc celui où tu es.
+  function dessinerAlerte(k) {
+    const lieu = COURSE.lieux[k];
+    return `
+      <div class="alerte-plein">
+        <div class="surtitre clair">Douleur vive</div>
+        <h1 class="titre">Arrête-toi ici.</h1>
+        <div class="alerte-lieu">${echapper(lieu.nom)}</div>
+        <div class="alerte-txt">Préviens un bénévole.</div>
+        <div class="espace"></div>
+        <button class="btn btn-blanc" data-action="erreur-alerte">Je me suis trompé de bouton</button>
+      </div>`;
+  }
+
+  // Recalage : « Tu es à quel ravito ? »
+  function dessinerRecalage() {
+    const ph = phase();
+    const k = dernierLieuAtteint();
+    const boutons = [];
+    for (let j = k + 1; j <= NB_LIEUX; j++) {
+      boutons.push(`<button class="btn btn-gros" data-action="recaler" data-lieu="${j}">${echapper(COURSE.lieux[j].nom)}</button>`);
+    }
+    const rester = ph.ecran === "segment"
+      ? `Je suis toujours en route vers ${echapper(COURSE.segments[ph.seg].a)}`
+      : `Je suis toujours ${echapper(COURSE.lieux[k].au)}`;
+    return `
+      <header class="entete">
+        <div class="surtitre">On se recale</div>
+        <h1 class="titre">Tu es à quel ravito ?</h1>
+      </header>
+      ${boutons.join("")}
+      <div class="espace"></div>
+      <button class="btn" data-action="pas-recaler">${rester}</button>`;
   }
 
   // Écran provisoire d'arrivée (tableau complet + Excel à l'étape 5)
@@ -442,7 +581,6 @@
       <button class="btn" data-action="annuler">Annuler</button>`;
   }
 
-  // Met à jour seulement ce qui bouge (compte à rebours, horloges)
   function rafraichirChiffres() {
     const n = maintenant();
     const compte = document.getElementById("compte");
@@ -453,8 +591,7 @@
     if (ht) ht.textContent = jolieDate(n);
   }
 
-  // Temps restant lisible : "2 j 16 h", "3 h 12 min", "4:05"
-  function tempsRestant(ms) {
+  function tempsRestant(ms) {                 // "2 j 16 h", "3 h 12 min", "4:05"
     if (ms <= 0) return "0:00";
     const s = Math.ceil(ms / 1000);
     const j = Math.floor(s / 86400);
@@ -471,7 +608,6 @@
     const n = maintenant();
     const ph = phase();
     const ecran = ecranForce || ph.ecran;
-    // On redessine seulement si quelque chose a changé (sinon on met juste l'heure à jour)
     const signature = [ecran, ph.seg, ph.lieu, heureDeCourse(n),
       ecran === "ravito" || ecran === "segment" ? Math.floor(n / 60000) : ""].join("|");
     if (forcer || signature !== signatureAffichee) {
@@ -484,11 +620,14 @@
       let html;
       if (ecran === "correction") html = dessinerCorrection();
       else if (ecran === "test") html = dessinerTest();
+      else if (ecran === "recalage") html = dessinerRecalage();
       else if (ecran === "avant") html = dessinerAvant();
       else if (ecran === "segment") html = dessinerSegment(ph.seg);
       else if (ecran === "ressenti") html = dessinerRessenti(ph.lieu);
+      else if (ecran === "alerte") html = dessinerAlerte(ph.lieu);
       else if (ecran === "ravito") html = dessinerRavito(ph.lieu);
       else html = dessinerArrivee();
+      document.body.classList.toggle("fond-alerte", ecran === "alerte");
       app.innerHTML = bandeauTest() + html;
       if (changeEcran) window.scrollTo(0, 0);
     }
@@ -496,6 +635,15 @@
   }
 
   // ---------- Appuis sur les boutons ----------
+  function enregistrerArrivee(k, n, viaRecalage) {
+    const s = calculerStatut(k, n);
+    etat.passages[k] = Object.assign({
+      arrivee: n.toISOString(), depart: null, ressenti: {},
+      ressentiFini: k === NB_LIEUX, ressentiPasse: false,
+    }, s);
+    noterEvenement("j'arrive", COURSE.lieux[k].nom + " · " + STATUTS[s.statut].titre + (viaRecalage ? " (recalage)" : ""));
+  }
+
   app.addEventListener("click", function (ev) {
     const bouton = ev.target.closest("button[data-action]");
     if (!bouton) return;
@@ -545,16 +693,9 @@
         setTimeout(() => { bouton.textContent = texte; bouton.classList.remove("note"); }, 1000);
         return;
       }
-      case "arrive": {
-        const k = dernierLieuAtteint() + 1;
-        const fin = k === NB_LIEUX;
-        etat.passages[k] = {
-          arrivee: n.toISOString(), depart: null, ressenti: {},
-          ressentiFini: fin, ressentiPasse: false,
-        };
-        noterEvenement("j'arrive", COURSE.lieux[k].nom);
+      case "arrive":
+        enregistrerArrivee(dernierLieuAtteint() + 1, n, false);
         break;
-      }
 
       // --- Ressenti ---
       case "choix": {
@@ -563,6 +704,7 @@
         const v = Number(bouton.dataset.v);
         p.ressenti[q] = p.ressenti[q] === v ? undefined : v;   // 2e appui = annuler
         sauver();
+        if (q === "douleur" && p.ressenti[q] === 3) noterEvenement("alerte affichée", "douleur vive · " + COURSE.lieux[ph.lieu].nom);
         break;
       }
       case "plan": {
@@ -582,6 +724,15 @@
         break;
       }
 
+      // --- Alerte ---
+      case "erreur-alerte": {
+        const p = etat.passages[ph.lieu];
+        delete p.ressenti.douleur;
+        p.ressentiFini = false;               // on revient aux questions
+        noterEvenement("alerte annulée", "je me suis trompé de bouton");
+        break;
+      }
+
       // --- Ravito ---
       case "repars": {
         const p = etat.passages[ph.lieu];
@@ -594,6 +745,26 @@
         break;
       }
 
+      // --- Recalage ---
+      case "recaler": {
+        const j = Number(bouton.dataset.lieu);
+        const k = dernierLieuAtteint();
+        // Le ravito où l'on était sans avoir appuyé « Je repars » : départ inconnu
+        if (k > 0 && !etat.passages[k].depart) etat.passages[k].recale = true;
+        // Les ravitos sautés : passés sans heure
+        for (let m = k + 1; m < j; m++) etat.passages[m] = { recale: true, ressentiFini: true, ressenti: {} };
+        enregistrerArrivee(j, n, true);
+        noterEvenement("recalage", "je suis à " + COURSE.lieux[j].nom);
+        etat.recalageIgnoreJusqua = null;
+        ecranForce = null;
+        break;
+      }
+      case "pas-recaler":
+        etat.recalageIgnoreJusqua = new Date(n.getTime() + 30 * 60000).toISOString();  // on ne redemande pas avant 30 min
+        sauver();
+        ecranForce = null;
+        break;
+
       // --- Mode test ---
       case "test":
         ouvrirTest();
@@ -603,6 +774,7 @@
         ecrireJSON(CLE_MODE_TEST, modeTest);
         etat = charger();
         ecranForce = null;
+        verifierRecalage();
         break;
       case "test-effacer":
         ecrireJSON(CLE_TEST, null);
@@ -614,6 +786,7 @@
         ecrireJSON(CLE_MODE_TEST, null);
         etat = charger();
         ecranForce = null;
+        verifierRecalage();
         break;
     }
     afficher(true);
@@ -629,7 +802,7 @@
   // Mode test : appui long (1 s) sur le titre
   let minuterieAppuiLong = null;
   app.addEventListener("pointerdown", function (ev) {
-    if (!ev.target.closest(".titre, .titre-seg, .surtitre")) return;
+    if (!ev.target.closest(".titre, .titre-seg, .titre-moyen, .surtitre")) return;
     minuterieAppuiLong = setTimeout(ouvrirTest, 1000);
   });
   ["pointerup", "pointercancel", "pointerleave"].forEach((t) =>
@@ -637,13 +810,18 @@
   app.addEventListener("contextmenu", (ev) => ev.preventDefault());
 
   // ---------- Démarrage ----------
+  verifierRecalage();
   afficher(true);
   setInterval(afficher, 1000);
+  // À chaque réouverture (téléphone sorti de la poche) : remise à jour + recalage si besoin
   document.addEventListener("visibilitychange", function () {
-    if (!document.hidden) afficher(false);
+    if (!document.hidden) {
+      verifierRecalage();
+      afficher(true);
+    }
   });
 
-  // ---------- Hors ligne : le « service worker » garde une copie de l'appli ----------
+  // ---------- Hors ligne ----------
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", function () {
       navigator.serviceWorker.register("sw.js").catch(function () {});
