@@ -208,3 +208,8 @@ body.fond-alerte, body.fond-alerte #app { background: var(--alerte); }
 .tableau .num { text-align: right; padding-left: 8px; white-space: nowrap; }
 .discret-td { color: var(--label); font-weight: 500; font-size: 14px; }
 .violet-clair { color: var(--nutrition); }
+
+/* ---------- Étape 6 : scénarios du mode test ---------- */
+.titre-scenarios { margin-top: 6px; }
+.grille-scenarios { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.btn-scenario { font-size: 15px; font-weight: 700; padding: 6px 8px; color: var(--texte); background: var(--carte); }

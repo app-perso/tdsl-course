@@ -923,6 +923,10 @@
       [["−1 h", -60], ["−5", -5], ["+5", 5], ["+1 h", 60]],
       "Dimanche 29/11 · données de test séparées de la vraie course") + `
       <button class="btn btn-principal" data-action="test-valider">Faire comme s'il était cette heure</button>
+      <div class="bloc-label titre-scenarios">Ou va directement à un écran (données de test)</div>
+      <div class="grille-scenarios">
+        ${SCENARIOS.map((sc, i) => `<button class="btn btn-scenario" data-action="scenario" data-i="${i}">${echapper(sc.nom)}</button>`).join("")}
+      </div>
       <button class="btn" data-action="exporter">Exporter en Excel (${modeTest ? "données de test" : "vraie course"})</button>
       <button class="btn" data-action="test-effacer">Effacer les données de test</button>
       <button class="btn btn-danger" data-action="reel-zero">Remettre la vraie course à zéro</button>
@@ -930,6 +934,77 @@
       <div class="espace"></div>
       <div class="discret">Version ${VERSION_APP}</div>
       <button class="btn" data-action="annuler">Annuler</button>`;
+  }
+
+  // ---------- Mode test : scénarios tout prêts ----------
+  // Chaque scénario rejoue la course à des heures données, puis règle l'heure finale.
+  function aHeure(hhmm) {
+    modeTest = { decalageMs: dateDuJour(hhmm) - Date.now() };
+  }
+  const pas = {
+    arrive: (k, h) => { aHeure(h); enregistrerArrivee(k, maintenant(), false); },
+    passer: (k) => { const p = etat.passages[k]; p.ressentiFini = true; p.ressentiPasse = true; p.ressenti = {}; },
+    ressenti: (k, r, fini) => { const p = etat.passages[k]; p.ressenti = r; p.ressentiFini = fini !== false; },
+    repars: (k, h) => {
+      aHeure(h);
+      const c = calculRavito(k);
+      etat.passages[k].depart = maintenant().toISOString();
+      etat.preparees.iso = etat.preparees.iso.concat(c.iso);
+      etat.preparees.sachets = etat.preparees.sachets.concat(c.sachets);
+      noterEvenement("je repars", COURSE.lieux[k].nom);
+    },
+    col: (decision) => {
+      const p = etat.passages[IDX_SAINT_ROCH];
+      p.objectif = proposerObjectif(new Date(p.depart), niveauEtat(p));
+      p.decision = decision;
+      noterEvenement("décision au col", p.objectif.objectif + " · " + decision);
+    },
+  };
+  function jusquAuCol() {
+    pas.arrive(1, "07:42"); pas.passer(1); pas.repars(1, "07:48");
+    pas.arrive(2, "09:55"); pas.passer(2); pas.repars(2, "10:05");
+    pas.arrive(3, "12:05"); pas.passer(3);
+  }
+  const SCENARIOS = [
+    { nom: "Avant le départ", heure: "05:25", jouer: () => {} },
+    { nom: "En course S1", heure: "06:40", jouer: () => {} },
+    { nom: "Ressenti Madone", heure: "07:43", jouer: () => { pas.arrive(1, "07:42"); } },
+    { nom: "Ravito en avance", heure: "07:11", jouer: () => { pas.arrive(1, "07:10"); pas.passer(1); } },
+    { nom: "Ravito en retard", heure: "10:46", jouer: () => {
+      pas.arrive(1, "07:48"); pas.passer(1); pas.repars(1, "07:55");
+      pas.arrive(2, "10:45"); pas.passer(2); } },
+    { nom: "Contre la barrière", heure: "08:21", jouer: () => { pas.arrive(1, "08:20"); pas.passer(1); } },
+    { nom: "Conseils ressenti", heure: "09:56", jouer: () => {
+      pas.arrive(1, "07:42"); pas.passer(1); pas.repars(1, "07:48");
+      pas.arrive(2, "09:55"); pas.ressenti(2, { jambes: 2, ventre: 3, douleur: 2, moral: 3 }); } },
+    { nom: "Alerte douleur vive", heure: "07:43", jouer: () => {
+      pas.arrive(1, "07:42"); pas.ressenti(1, { douleur: 3 }, false);
+      noterEvenement("alerte affichée", "douleur vive · " + COURSE.lieux[1].nom); } },
+    { nom: "Ravito du col", heure: "12:06", jouer: () => { jusquAuCol(); } },
+    { nom: "Décision au col", heure: "12:13", jouer: () => { jusquAuCol(); pas.repars(3, "12:13"); } },
+    { nom: "S4 avec objectif", heure: "13:30", jouer: () => { jusquAuCol(); pas.repars(3, "12:13"); pas.col("go"); } },
+    { nom: "Férion : objectif manqué", heure: "14:41", jouer: () => {
+      jusquAuCol(); pas.repars(3, "12:13"); pas.col("go"); pas.arrive(4, "14:40"); pas.passer(4); } },
+    { nom: "Férion : objectif tenu", heure: "14:06", jouer: () => {
+      jusquAuCol(); pas.repars(3, "12:13"); pas.col("go"); pas.arrive(4, "14:05"); pas.passer(4); } },
+    { nom: "Appli oubliée (recalage)", heure: "10:40", jouer: () => {} },
+    { nom: "Arrivée + Excel", heure: "15:26", jouer: () => {
+      jusquAuCol(); pas.repars(3, "12:13"); pas.col("go");
+      pas.arrive(4, "14:40"); pas.passer(4); pas.repars(4, "14:45");
+      pas.arrive(5, "15:25"); } },
+  ];
+  function lancerScenario(i) {
+    const sc = SCENARIOS[i];
+    ecrireJSON(CLE_TEST, null);
+    aHeure("05:00");
+    etat = charger();
+    sc.jouer();
+    aHeure(sc.heure);
+    ecrireJSON(CLE_MODE_TEST, modeTest);
+    sauver();
+    ecranForce = null;
+    signatureAffichee = null;
+    verifierRecalage();
   }
 
   function rafraichirChiffres() {
@@ -1145,6 +1220,9 @@
       case "test":
         ouvrirTest();
         return;
+      case "scenario":
+        lancerScenario(Number(bouton.dataset.i));
+        break;
       case "test-valider":
         modeTest = { decalageMs: dateDuJour(minutesEnHhmm(minutesEnReglage)) - Date.now() };
         ecrireJSON(CLE_MODE_TEST, modeTest);
