@@ -39,7 +39,7 @@ html, body {
   min-height: 100dvh;
   max-width: 520px;
   margin: 0 auto;
-  padding: calc(env(safe-area-inset-top) + 20px) 16px calc(env(safe-area-inset-bottom) + 20px);
+  padding: calc(var(--haut-secours, env(safe-area-inset-top)) + 20px) 16px calc(env(safe-area-inset-bottom) + 20px);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -199,3 +199,4 @@ body.fond-alerte, body.fond-alerte #app { background: var(--alerte); }
 .bloc-objectif { border: 2px solid var(--objectif); }
 .btn-objectif { background: var(--objectif); color: #FFFFFF; }
 .ligne-objectif { font-size: 18px; font-weight: 800; color: #B3A8FF; line-height: 1.3; }
+.btn-danger { border-color: var(--alerte); color: var(--bpm); }

@@ -706,6 +706,7 @@
       "Dimanche 29/11 · données de test séparées de la vraie course") + `
       <button class="btn btn-principal" data-action="test-valider">Faire comme s'il était cette heure</button>
       <button class="btn" data-action="test-effacer">Effacer les données de test</button>
+      <button class="btn btn-danger" data-action="reel-zero">Remettre la vraie course à zéro</button>
       ${modeTest ? `<button class="btn" data-action="test-quitter">Quitter le mode test</button>` : ""}
       <div class="espace"></div>
       <div class="discret">Version ${VERSION_APP}</div>
@@ -927,6 +928,18 @@
         ecranForce = null;
         verifierRecalage();
         break;
+      case "reel-zero":
+        // 1er appui : on demande confirmation ; 2e appui : on efface
+        if (!bouton.dataset.confirme) {
+          bouton.dataset.confirme = "1";
+          bouton.textContent = "Sûr ? Appuie encore pour tout effacer";
+          return;
+        }
+        ecrireJSON(CLE_REELLE, null);
+        if (!modeTest) etat = charger();
+        bouton.textContent = "Vraie course remise à zéro ✓";
+        delete bouton.dataset.confirme;
+        return;
       case "test-effacer":
         ecrireJSON(CLE_TEST, null);
         if (modeTest) etat = charger();
@@ -959,6 +972,23 @@
   ["pointerup", "pointercancel", "pointerleave"].forEach((t) =>
     app.addEventListener(t, () => clearTimeout(minuterieAppuiLong)));
   app.addEventListener("contextmenu", (ev) => ev.preventDefault());
+
+  // ---------- Barre du haut de l'iPhone ----------
+  // Après un rechargement, iOS oublie parfois la hauteur de la barre d'état
+  // (heure, batterie) : l'appli passerait dessous. On met une marge de secours.
+  function verifierMargeHaut() {
+    const sonde = document.createElement("div");
+    sonde.style.cssText = "position:absolute;visibility:hidden;padding-top:env(safe-area-inset-top)";
+    document.body.appendChild(sonde);
+    const haut = parseFloat(getComputedStyle(sonde).paddingTop) || 0;
+    sonde.remove();
+    const appliEcranAccueil = window.navigator.standalone === true;
+    if (appliEcranAccueil && haut < 20) document.documentElement.style.setProperty("--haut-secours", "54px");
+    else document.documentElement.style.removeProperty("--haut-secours");
+  }
+  verifierMargeHaut();
+  window.addEventListener("resize", verifierMargeHaut);
+  window.addEventListener("pageshow", verifierMargeHaut);
 
   // ---------- Démarrage ----------
   verifierRecalage();
