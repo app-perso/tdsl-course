@@ -260,8 +260,12 @@
     const minutes = t.getHours() * 60 + t.getMinutes();
     let idx = COURSE.objectifsCol.findIndex((l) => minutes <= hhmmEnMinutes(l.jusqua));
     if (idx < 0) idx = COURSE.objectifsCol.length - 1;
+    // heure limite de départ du col pour garder cette ligne du tableau
+    const departAvant = new Date(dateDuJour(COURSE.objectifsCol[idx].jusqua).getTime() + decalageDepartMs());
     if (niveau === 2) idx = Math.min(idx + 1, COURSE.objectifsCol.length - 1);
     const o = ligneObjectif(idx);
+    o.departAvant = departAvant.toISOString();
+    o.prudent = niveau === 2;
     if (o.finir) o.raison = "chrono";
     return o;
   }
@@ -551,6 +555,7 @@
         </div>
         <div class="statut ${st.classe}">
           <div class="statut-ligne"><span>${st.titre}</span><span>${pastille}</span></div>
+          <div class="statut-sous">${repereRythme(p)}</div>
           ${sous ? `<div class="statut-sous">${sous}</div>` : ""}
         </div>
         <h1 class="titre-moyen">Repars au plus tard à ${jolieDate(reparsAvant)}</h1>
@@ -563,9 +568,48 @@
         ${vides ? `<div class="info">${vides}</div>` : ""}
         ${conseils.map((x) => `<div class="conseil${x.fort ? " fort" : ""}">${echapper(x.texte)}</div>`).join("")}
       </section>
-      ${blocArrivee(segSuivant, true, fenetreArrivee(k, maintenant(), maintenant()), "Ensuite · " + segSuivant.id, bilanFerion(p))}
+      ${k === IDX_SAINT_ROCH
+        ? blocObjectifAuCol(p)
+        : blocArrivee(segSuivant, true, fenetreArrivee(k, maintenant(), maintenant()), "Ensuite · " + segSuivant.id, bilanFerion(p))}
       <div class="espace"></div>
       <button class="btn btn-principal" data-action="repars">Je repars</button>`;
+  }
+
+  // Repère de rythme : fourchette visée pour ce segment, heure d'arrivée, écart
+  function repereRythme(p) {
+    if (!p.fenMin || !p.fenMax) return "";
+    const min = new Date(p.fenMin), max = new Date(p.fenMax), arr = new Date(p.arrivee);
+    let ecart = "";
+    if (arr < min) ecart = " · " + Math.round((min - arr) / 60000) + " min d'avance";
+    else if (arr > max) ecart = " · " + Math.round((arr - max) / 60000) + " min de retard";
+    return `Fourchette ${jolieDate(min)} – ${jolieDate(max)} · arrivé ${jolieDate(arr)}${ecart}`;
+  }
+
+  // Au ravito du col : l'objectif proposé si tu repars maintenant (mis à jour chaque minute)
+  function blocObjectifAuCol(p) {
+    const n = maintenant();
+    const segS4 = COURSE.segments[IDX_SAINT_ROCH];
+    const fen = fenetreArrivee(IDX_SAINT_ROCH, n, n);
+    const o = proposerObjectif(n, niveauEtat(p));
+    const fourchette = `Fourchette Férion ${jolieDate(fen.min)} – ${jolieDate(fen.max)} · barrière ${joli(segS4.barriere)}`;
+    if (o.finir) {
+      return `
+        <section class="bloc">
+          <div class="bloc-label">Objectif au col</div>
+          <div class="gros orange">Finir en contrôle</div>
+          <div class="consigne">${o.raison === "etat" ? "État 🔴 : pas d'objectif chrono" : "Trop tard pour un objectif chrono"}</div>
+          <div class="info">${fourchette}</div>
+        </section>`;
+    }
+    return `
+      <section class="bloc bloc-objectif">
+        <div class="bloc-label">Objectif proposé · si tu repars avant ${jolieDate(new Date(o.departAvant))}</div>
+        <div class="gros violet">${echapper(o.objectif)}</div>
+        <div class="consigne">${echapper(capitaliser(o.texte))} · Férion avant ${jolieDate(new Date(o.limiteFerion))}</div>
+        ${o.prudent ? `<div class="info">État 🟡 : un cran plus prudent que le chrono seul</div>` : ""}
+        <div class="info">${fourchette}</div>
+        <div class="info">Tu confirmes en touchant « Je repars »</div>
+      </section>`;
   }
 
   // Au Férion : « Objectif tenu » ou objectif suivant (+30 min)
