@@ -15,6 +15,7 @@ const FICHIERS = [
   "icons/icon-180.png",
   "icons/icon-192.png",
   "icons/icon-512.png",
+  "vendor/xlsx.mini.min.js",
 ];
 
 self.addEventListener("install", (event) => {

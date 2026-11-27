@@ -24,7 +24,7 @@ jobs:
       - name: Préparer le site
         run: |
           mkdir _site
-          cp -r index.html style.css app.js course.js sw.js manifest.webmanifest fonts icons _site/
+          cp -r index.html style.css app.js course.js sw.js manifest.webmanifest fonts icons vendor _site/
           # Nouvelle version du cache hors ligne à chaque déploiement
           sed -i "s/__VERSION__/${GITHUB_SHA::8}/" _site/sw.js _site/app.js
       - uses: actions/configure-pages@v5

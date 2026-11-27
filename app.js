@@ -696,26 +696,200 @@
       <button class="btn" data-action="pas-recaler">${rester}</button>`;
   }
 
-  // Écran provisoire d'arrivée (tableau complet + Excel à l'étape 5)
+  // ---------- 7. Arrivée : temps total, passages vs plan, export Excel ----------
+  // Écart vs plan initial (min) : 0 si dans la fourchette, + = retard, − = avance
+  function ecartPlan(arrivee, seg) {
+    const min = dateDuJour(seg.arriveeMin), max = dateDuJour(seg.arriveeMax);
+    if (arrivee > max) return Math.round((arrivee - max) / 60000);
+    if (arrivee < min) return -Math.round((min - arrivee) / 60000);
+    return 0;
+  }
+  function texteEcart(e) {
+    if (e === null || e === undefined) return "—";
+    if (e === 0) return "OK";
+    return (e > 0 ? "+" : "−") + Math.abs(e) + " min";
+  }
+  function arretMinutes(p) {
+    if (!p || !p.arrivee || !p.depart) return null;
+    return Math.round((new Date(p.depart) - new Date(p.arrivee)) / 60000);
+  }
+  function tempsTotalArret() {
+    let total = 0;
+    for (let i = 1; i < NB_LIEUX; i++) total += arretMinutes(etat.passages[i]) || 0;
+    return total;
+  }
+
   function dessinerArrivee() {
     const fin = new Date(etat.passages[NB_LIEUX].arrivee);
+    chargerSheetJS();                         // prêt pour l'export, sans attendre le clic
     const lignes = [];
     for (let i = 1; i <= NB_LIEUX; i++) {
       const p = etat.passages[i];
-      if (p && p.arrivee) lignes.push(`<div class="bloc-ligne info"><span>${echapper(COURSE.lieux[i].court)}</span><span>${jolieDate(new Date(p.arrivee))}</span></div>`);
+      const seg = COURSE.segments[i - 1];
+      const arr = p && p.arrivee ? new Date(p.arrivee) : null;
+      const e = arr ? ecartPlan(arr, seg) : null;
+      lignes.push(`
+        <tr>
+          <td>${echapper(COURSE.lieux[i].court)}</td>
+          <td class="num">${arr ? jolieDate(arr) : "—"}</td>
+          <td class="num discret-td">${joli(seg.arriveeMin)}–${joli(seg.arriveeMax)}</td>
+          <td class="num ${e > 0 ? "orange" : e < 0 ? "violet-clair" : "vert"}">${texteEcart(e)}</td>
+        </tr>`);
+    }
+    const sr = etat.passages[IDX_SAINT_ROCH];
+    const fe = etat.passages[IDX_FERION];
+    let objectif = "Aucun objectif chrono";
+    if (sr && sr.decision === "go" && sr.objectif) {
+      const vise = fe && fe.objectifFerion ? fe.objectifFerion : sr.objectif;
+      const ok = vise.arriveeVisee && fin <= new Date(vise.arriveeVisee);
+      objectif = `${vise.objectif} : ${ok ? "réussi ✓" : "manqué"}`;
     }
     return `
       <header class="entete">
-        <div class="surtitre">Arrivée · Levens</div>
+        <div class="surtitre">Arrivée · Levens · ${jolieDate(fin)}</div>
         <h1 class="titre">${jolieDuree(fin - dateDepart())}</h1>
-        <div class="sous-titre">Bravo ! Arrivé à ${jolieDate(fin)}</div>
+        <div class="sous-titre">Bravo !</div>
       </header>
       <section class="bloc">
-        <div class="bloc-label">Passages</div>
-        ${lignes.join("")}
+        <div class="bloc-label">Passages vs plan</div>
+        <table class="tableau">
+          <thead><tr><th>Ravito</th><th class="num">Arrivé</th><th class="num">Plan</th><th class="num">Écart</th></tr></thead>
+          <tbody>${lignes.join("")}</tbody>
+        </table>
+      </section>
+      <section class="bloc">
+        <div class="bloc-label">Résumé</div>
+        <div class="consigne">${echapper(objectif)}</div>
+        <div class="info">Temps total d'arrêt : ${tempsTotalArret()} min</div>
       </section>
       <div class="espace"></div>
-      <div class="discret">Tableau complet et export Excel : étape 5.</div>`;
+      <button class="btn btn-principal" data-action="exporter">Exporter en Excel</button>`;
+  }
+
+  // ---------- Export Excel (SheetJS, rangé dans l'appli : marche hors ligne) ----------
+  let promesseSheetJS = null;
+  function chargerSheetJS() {
+    if (window.XLSX) return Promise.resolve();
+    if (!promesseSheetJS) {
+      promesseSheetJS = new Promise(function (ok, ko) {
+        const sc = document.createElement("script");
+        sc.src = "vendor/xlsx.mini.min.js";
+        sc.onload = ok;
+        sc.onerror = function () { promesseSheetJS = null; ko(); };
+        document.head.appendChild(sc);
+      });
+    }
+    return promesseSheetJS;
+  }
+
+  function hms(iso) {                         // ISO -> "HH:MM:SS"
+    if (!iso) return "";
+    const d = new Date(iso);
+    return [d.getHours(), d.getMinutes(), d.getSeconds()].map((x) => String(x).padStart(2, "0")).join(":");
+  }
+  function hmm(ms) {                          // durée -> "H:MM"
+    if (ms === null || ms === undefined || isNaN(ms)) return "";
+    const neg = ms < 0; ms = Math.abs(ms);
+    const min = Math.round(ms / 60000);
+    return (neg ? "-" : "") + Math.floor(min / 60) + ":" + String(min % 60).padStart(2, "0");
+  }
+  const NOMS_ETAT = ["", "vert", "orange", "rouge"];
+
+  function construireClasseur() {
+    const X = window.XLSX;
+    const wb = X.utils.book_new();
+
+    // Onglet Passages : 1 ligne par ravito (+ le départ)
+    const passages = [[
+      "Ravito", "Km", "Heure d'arrivée", "Heure de départ", "Durée d'arrêt (min)",
+      "Heure min (plan)", "Heure max (plan)", "Écart (min, + = retard)", "Statut",
+      "Jambes (1-3)", "Ventre (1-3)", "Douleur (1-3)", "Moral (1-3)", "Scénario",
+      "Objectif proposé", "Objectif choisi (oui/non)", "Marge barrière (min)",
+    ]];
+    passages.push(["Départ " + COURSE.lieux[0].nom, 0, "", hms(dateDepart().toISOString()), "",
+      "", "", "", "", "", "", "", "", "", "", "", ""]);
+    for (let i = 1; i <= NB_LIEUX; i++) {
+      const p = etat.passages[i] || {};
+      const seg = COURSE.segments[i - 1];
+      const r = p.ressentiPasse ? {} : (p.ressenti || {});
+      const niveau = niveauEtat(p);
+      let scenario = p.recale && !p.arrivee ? "ravito sauté (recalage)" : p.ressentiPasse ? "ressenti passé" : niveau ? "état " + NOMS_ETAT[niveau] : "";
+      let propose = "", choisi = "";
+      if (i === IDX_SAINT_ROCH && p.objectif) {
+        propose = p.objectif.objectif;
+        choisi = p.decision === "go" ? "oui" : "non";
+      }
+      if (i === IDX_FERION && p.objectifFerion) {
+        propose = (p.objectifFerion.resultat === "tenu" ? "Objectif tenu : " : "Nouvel objectif : ") + p.objectifFerion.objectif;
+        choisi = "oui";
+      }
+      passages.push([
+        COURSE.lieux[i].nom, seg.kmFin, hms(p.arrivee), hms(p.depart), arretMinutes(p) ?? "",
+        seg.arriveeMin, seg.arriveeMax, p.arrivee ? ecartPlan(new Date(p.arrivee), seg) : "",
+        p.statut ? STATUTS[p.statut].titre : "",
+        r.jambes || "", r.ventre || "", r.douleur || "", r.moral || "", scenario,
+        propose, choisi, p.margeBarriere ?? "",
+      ]);
+    }
+    const f1 = X.utils.aoa_to_sheet(passages);
+    f1["!cols"] = passages[0].map((t, c) => ({ wch: c === 0 ? 20 : Math.max(10, t.length + 2) }));
+    X.utils.book_append_sheet(wb, f1, "Passages");
+
+    // Onglet Événements
+    const ev = [["Heure", "Type", "Détail"]].concat(etat.evenements.map((e) => [hms(e.heure), e.type, e.detail]));
+    const f2 = X.utils.aoa_to_sheet(ev);
+    f2["!cols"] = [{ wch: 10 }, { wch: 22 }, { wch: 60 }];
+    X.utils.book_append_sheet(wb, f2, "Événements");
+
+    // Onglet Résumé
+    const finIso = etat.passages[NB_LIEUX] && etat.passages[NB_LIEUX].arrivee;
+    const res = [
+      ["Course", COURSE.nom + " · " + COURSE.dateDepart],
+      ["Départ", hms(dateDepart().toISOString())],
+      ["Arrivée", hms(finIso)],
+      ["Temps final", finIso ? hmm(new Date(finIso) - dateDepart()) : "pas encore arrivé"],
+      ["Temps total d'arrêt (min)", tempsTotalArret()],
+      [],
+      ["Segment", "Temps réel (h:mm)", "Temps min", "Temps max", "Écart vs max (h:mm, + = plus lent)"],
+    ];
+    for (let i = 0; i < COURSE.segments.length; i++) {
+      const seg = COURSE.segments[i];
+      const pArr = etat.passages[i + 1];
+      const dep = i === 0 ? dateDepart() : (etat.passages[i] && etat.passages[i].depart ? new Date(etat.passages[i].depart) : null);
+      const arr = pArr && pArr.arrivee ? new Date(pArr.arrivee) : null;
+      const reel = dep && arr ? arr - dep : null;
+      res.push([seg.id + " " + seg.de + " → " + seg.a, hmm(reel), seg.tempsMin, seg.tempsMax,
+        reel !== null ? hmm(reel - dureeEnMs(seg.tempsMax)) : ""]);
+    }
+    const f3 = X.utils.aoa_to_sheet(res);
+    f3["!cols"] = [{ wch: 28 }, { wch: 18 }, { wch: 10 }, { wch: 10 }, { wch: 30 }];
+    X.utils.book_append_sheet(wb, f3, "Résumé");
+    return wb;
+  }
+
+  function exporterExcel(bouton) {
+    const texte = bouton.textContent;
+    if (!window.XLSX) {
+      bouton.textContent = "Préparation…";
+      chargerSheetJS().then(() => { bouton.textContent = texte + " (appuie encore)"; })
+        .catch(() => { bouton.textContent = "Export impossible (fichier manquant)"; });
+      return;
+    }
+    const nom = "TDSL_course_" + COURSE.dateDepart + (modeTest ? "_test" : "") + ".xlsx";
+    const donnees = window.XLSX.write(construireClasseur(), { bookType: "xlsx", type: "array" });
+    const type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    const fichier = new File([donnees], nom, { type: type });
+    // iPhone : feuille de partage (Mail, Fichiers, AirDrop…) ; sinon téléchargement
+    if (navigator.canShare && navigator.canShare({ files: [fichier] })) {
+      navigator.share({ files: [fichier], title: nom }).catch(function () {});
+    } else {
+      const url = URL.createObjectURL(new Blob([donnees], { type: type }));
+      const a = document.createElement("a");
+      a.href = url; a.download = nom;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
+    noterEvenement("export Excel", nom);
   }
 
   function dessinerReglage(titre, surtitre, boutons, sousTexte) {
@@ -749,6 +923,7 @@
       [["−1 h", -60], ["−5", -5], ["+5", 5], ["+1 h", 60]],
       "Dimanche 29/11 · données de test séparées de la vraie course") + `
       <button class="btn btn-principal" data-action="test-valider">Faire comme s'il était cette heure</button>
+      <button class="btn" data-action="exporter">Exporter en Excel (${modeTest ? "données de test" : "vraie course"})</button>
       <button class="btn" data-action="test-effacer">Effacer les données de test</button>
       <button class="btn btn-danger" data-action="reel-zero">Remettre la vraie course à zéro</button>
       ${modeTest ? `<button class="btn" data-action="test-quitter">Quitter le mode test</button>` : ""}
@@ -818,6 +993,7 @@
       arrivee: n.toISOString(), depart: null, ressenti: {},
       ressentiFini: k === NB_LIEUX, ressentiPasse: false,
     }, s);
+    noterEvenement("j'arrive", COURSE.lieux[k].nom + " · " + STATUTS[s.statut].titre + (viaRecalage ? " (recalage)" : ""));
     const obj = objectifChoisiAuCol();
     if (k === IDX_FERION && obj) {
       const tenu = n <= new Date(obj.limiteFerion);
@@ -825,7 +1001,6 @@
       etat.passages[k].objectifFerion = Object.assign({}, o, { resultat: tenu ? "tenu" : "suivant" });
       noterEvenement("objectif au Férion", tenu ? "tenu : " + obj.objectif : "nouvel objectif : " + o.objectif);
     }
-    noterEvenement("j'arrive", COURSE.lieux[k].nom + " · " + STATUTS[s.statut].titre + (viaRecalage ? " (recalage)" : ""));
   }
 
   app.addEventListener("click", function (ev) {
@@ -961,6 +1136,11 @@
         ecranForce = null;
         break;
 
+      // --- Export ---
+      case "exporter":
+        exporterExcel(bouton);
+        return;
+
       // --- Mode test ---
       case "test":
         ouvrirTest();
@@ -1001,6 +1181,7 @@
   });
 
   function ouvrirTest() {
+    chargerSheetJS().catch(function () {});
     const n = maintenant();
     minutesEnReglage = modeTest ? n.getHours() * 60 + n.getMinutes() : hhmmEnMinutes("05:25");
     ecranForce = "test";
