@@ -13,6 +13,7 @@
   const CLE_REELLE = "tdsl-course-etat-v1";     // données de la vraie course
   const CLE_TEST = "tdsl-course-etat-test";     // données du mode test (séparées)
   const CLE_MODE_TEST = "tdsl-course-mode-test";
+  const VERSION_APP = "__VERSION__";            // remplacé automatiquement à chaque déploiement
   const app = document.getElementById("app");
   const NB_LIEUX = COURSE.lieux.length - 1;     // 5 arrivées de segment
   const IDX_SAINT_ROCH = COURSE.lieux.findIndex((l) => l.id === "saint-roch");
@@ -707,6 +708,7 @@
       <button class="btn" data-action="test-effacer">Effacer les données de test</button>
       ${modeTest ? `<button class="btn" data-action="test-quitter">Quitter le mode test</button>` : ""}
       <div class="espace"></div>
+      <div class="discret">Version ${VERSION_APP}</div>
       <button class="btn" data-action="annuler">Annuler</button>`;
   }
 
@@ -971,9 +973,24 @@
   });
 
   // ---------- Hors ligne ----------
+  // Mise à jour automatique : dès qu'une nouvelle version est publiée et qu'il y a
+  // du réseau, l'appli la récupère et se recharge toute seule (aucune donnée perdue :
+  // tout est déjà sauvegardé sur le téléphone).
   if ("serviceWorker" in navigator) {
+    const avaitDejaUneVersion = !!navigator.serviceWorker.controller;
+    let rechargee = false;
+    navigator.serviceWorker.addEventListener("controllerchange", function () {
+      if (!avaitDejaUneVersion || rechargee) return;
+      rechargee = true;
+      window.location.reload();
+    });
     window.addEventListener("load", function () {
-      navigator.serviceWorker.register("sw.js").catch(function () {});
+      navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(function (reg) {
+        reg.update().catch(function () {});
+        document.addEventListener("visibilitychange", function () {
+          if (!document.hidden) reg.update().catch(function () {});
+        });
+      }).catch(function () {});
     });
   }
   if (navigator.storage && navigator.storage.persist) {
