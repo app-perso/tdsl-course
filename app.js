@@ -44,7 +44,6 @@
       heureDepartCorrigee: null,
       compteAReboursLance: false,
       passages: {},
-      preparees: { iso: [], sachets: [] },
       recalageIgnoreJusqua: null,
       evenements: [],              // { heure: ISO, type, detail }
     };
@@ -52,7 +51,6 @@
   function charger() {
     const brut = lireJSON(modeTest ? CLE_TEST : CLE_REELLE);
     const e = Object.assign(etatVide(), brut || {});
-    e.preparees = Object.assign({ iso: [], sachets: [] }, e.preparees || {});
     e.passages = e.passages || {};
     return e;
   }
@@ -165,6 +163,9 @@
     if (p.recale) return null;
     return maintenant();                      // encore au ravito : « si tu repars maintenant »
   }
+  function aLaMinute(d) {                     // on ignore les secondes
+    return new Date(Math.floor(d.getTime() / 60000) * 60000);
+  }
   function fenetreArrivee(i, depart, n) {
     const seg = COURSE.segments[i];
     const planMin = dateDuJour(seg.arriveeMin);
@@ -174,11 +175,13 @@
     const facteur = precedent && precedent.statut === "lent" ? 1.15 : 1;
     let min, max;
     if (depart) {
-      min = new Date(depart.getTime() + dureeEnMs(seg.tempsMin) * facteur);
-      max = new Date(depart.getTime() + dureeEnMs(seg.tempsMax) * facteur);
+      min = aLaMinute(new Date(depart.getTime() + dureeEnMs(seg.tempsMin) * facteur));
+      max = aLaMinute(new Date(depart.getTime() + dureeEnMs(seg.tempsMax) * facteur));
     } else {
       min = planMin; max = planMax;
     }
+    if (min < planMin) min = planMin;         // « pas avant » : heure fixe du plan
+    if (max < min) max = min;
     if (max > barriere) max = barriere;
     if (min > max) min = max;
     const recalee = Math.abs(min - planMin) >= 60000 || Math.abs(max - planMax) >= 60000;
@@ -194,19 +197,19 @@
     const i = k - 1;
     const seg = COURSE.segments[i];
     const fen = fenetreArrivee(i, departDuSegment(i), arrivee);
-    const marge = Math.round((dateDuJour(seg.barriere) - arrivee) / 60000);
+    const arr = aLaMinute(arrivee);           // pile sur une borne = dans le plan
+    const marge = Math.round((dateDuJour(seg.barriere) - arr) / 60000);
     let statut;
     if (marge < COURSE.reglages.margeBarriereMin) statut = "barriere";
-    else if (arrivee < fen.min) statut = "avance";
-    else if (arrivee <= fen.max) statut = "plan";
+    else if (arr < fen.min) statut = "avance";
+    else if (arr <= fen.max) statut = "plan";
     else statut = "lent";
     return { statut: statut, margeBarriere: marge, fenMin: fen.min.toISOString(), fenMax: fen.max.toISOString() };
   }
-  function dureeArret(k) {
-    const p = etat.passages[k];
-    if (p.statut === "barriere") return 2;
-    if (p.statut === "lent") return 10;
-    return COURSE.segments[k - 1].arretPrevu;
+  function heureRepars(k) {
+    const fixe = dateDuJour(COURSE.segments[k - 1].reparsAuPlusTard);
+    const auMoins = new Date(aLaMinute(new Date(etat.passages[k].arrivee)).getTime() + 2 * 60000);
+    return fixe > auMoins ? fixe : auMoins;   // déjà passée : 2 min de ravito
   }
 
   // ---------- 4.2 État selon le ressenti ----------
@@ -276,33 +279,6 @@
   function objectifChoisiAuCol() {
     const sr = etat.passages[IDX_SAINT_ROCH];
     return sr && sr.decision === "go" && sr.objectif && !sr.objectif.finir ? sr.objectif : null;
-  }
-
-  // ---------- Calcul des flasques et sachets au ravito ----------
-  function prepareesAuDepart(impair) {
-    const limite = dateDuJour(COURSE.segments[0].arriveeMax);
-    const liste = [];
-    for (let h = 1; h <= 12; h++) if ((h % 2 === 1) === impair && debutHeure(h) <= limite) liste.push(h);
-    return liste;
-  }
-  function heuresAPreparer(impair, n, fin) {
-    const deja = new Set(prepareesAuDepart(impair).concat(impair ? etat.preparees.iso : etat.preparees.sachets));
-    const liste = [];
-    for (let h = 1; h <= 12; h++) {
-      if ((h % 2 === 1) !== impair || deja.has(h)) continue;
-      const debut = debutHeure(h);
-      if (debut <= fin && debut > new Date(n.getTime() - 3600000)) liste.push(h);
-    }
-    return liste;
-  }
-  function calculRavito(k) {
-    const n = maintenant();
-    const fin = fenetreArrivee(k, n, n).max;  // de maintenant à l'heure max d'arrivée au suivant
-    const estFerion = COURSE.lieux[k].id === "ferion";
-    const total = estFerion && !COURSE.reglages.reserveExigeeAuFerion ? 2 : COURSE.reglages.flasquesParDefaut;
-    const iso = heuresAPreparer(true, n, fin).slice(0, total);
-    const sachets = heuresAPreparer(false, n, fin);
-    return { total: total, iso: iso, eau: total - iso.length, sachets: sachets };
   }
 
   // ---------- Recalage : l'appli n'a pas été ouverte à un ravito ? ----------
@@ -383,13 +359,14 @@
       </section>`;
   }
 
-  function blocNutrition(h) {
+  function blocNutrition(h, ligneEnPlus) {
     const texte = capitaliser(nutritionPour(h)).replace(/, /g, " · ");
     return `
       <section class="bloc">
         <div class="bloc-label">Nutrition</div>
         <div class="nutri-h">H${h}</div>
         <div class="nutri-txt">${echapper(texte)}</div>
+        ${ligneEnPlus ? `<div class="consigne">${echapper(ligneEnPlus)}</div>` : ""}
       </section>`;
   }
 
@@ -403,7 +380,6 @@
   let ecranForce = null;      // "correction", "test" ou "recalage"
   let minutesEnReglage = null;
   let signatureAffichee = null;
-  let calculAffiche = null;   // flasques affichées, enregistrées au « Je repars »
 
   function dessinerAvant() {
     const seg = COURSE.segments[0];
@@ -420,7 +396,7 @@
       </header>
       ${blocArrivee(seg, true, fenetreArrivee(0, dateDepart(), maintenant()))}
       ${blocConsignes(seg)}
-      ${blocNutrition(1)}
+      ${blocNutrition(1, COURSE.sachetsDepart)}
       <div class="espace"></div>
       ${lance ? "" : `<button class="btn btn-principal" data-action="lancer">Départ dans 5 min</button>`}
       <button class="btn" data-action="corriger">Départ décalé ? Corriger l'heure</button>`;
@@ -528,29 +504,20 @@
     const lieu = COURSE.lieux[k];
     const segSuivant = COURSE.segments[k];
     const arrivee = new Date(p.arrivee);
-    const arret = dureeArret(k);
-    const reparsAvant = new Date(arrivee.getTime() + arret * 60000);
-    const c = calculRavito(k);
-    calculAffiche = c;
+    const reparsAvant = heureRepars(k);
+    const consigneFixe = COURSE.auRavito[lieu.id] || [];
 
     const st = STATUTS[p.statut] || STATUTS.plan;
     const sous = sousTitreStatut(k, p);
     const niveau = niveauEtat(p);
     const pastille = niveau ? ["", "🟢", "🟡", "🔴"][niveau] : "";
 
-    const detailIso = c.iso.length
-      ? `${c.iso.length} ISO (poudre ${c.iso.map((h) => "H" + h).join(" + ")})` + (c.eau ? ` + ${c.eau} eau` : "")
-      : `${c.eau} eau`;
-    const sachets = c.sachets.length === 0 ? ""
-      : c.sachets.length === 1 ? `Sachet H${c.sachets[0]} devant`
-      : `Sachets ${c.sachets.slice(0, -1).map((h) => "H" + h).join(", ")} et H${c.sachets[c.sachets.length - 1]} devant`;
-    const vides = c.total >= 4 ? "" : c.total === 3 ? "La 4e reste vide" : "La 3e et la 4e restent vides";
     const conseils = conseilsRessenti(p);
 
     return `
       <header class="entete">
         <div class="entete-ligne">
-          <div class="surtitre">Ravito · ${echapper(lieu.court)} · arrivé ${jolieDate(arrivee)}</div>
+          <div class="surtitre">Ravito · ${echapper(lieu.court)} · arrivé ${jolieDate(arrivee)} · arrêt ${echapper(COURSE.segments[k - 1].arret)}</div>
           <div class="horloge" id="horloge"></div>
         </div>
         <div class="statut ${st.classe}">
@@ -562,10 +529,7 @@
       </header>
       <section class="bloc">
         <div class="bloc-label">Au ravito</div>
-        <div class="flasques">Remplis ${c.total} flasques</div>
-        <div class="flasques-detail">${echapper(detailIso)}</div>
-        ${sachets ? `<div class="consigne">${sachets}</div>` : ""}
-        ${vides ? `<div class="info">${vides}</div>` : ""}
+        ${consigneFixe.map((l) => `<div class="ravito-ligne">${echapper(l)}</div>`).join("")}
         ${conseils.map((x) => `<div class="conseil${x.fort ? " fort" : ""}">${echapper(x.texte)}</div>`).join("")}
       </section>
       ${k === IDX_SAINT_ROCH
@@ -578,7 +542,7 @@
   // Repère de rythme : fourchette visée pour ce segment, heure d'arrivée, écart
   function repereRythme(p) {
     if (!p.fenMin || !p.fenMax) return "";
-    const min = new Date(p.fenMin), max = new Date(p.fenMax), arr = new Date(p.arrivee);
+    const min = new Date(p.fenMin), max = new Date(p.fenMax), arr = aLaMinute(new Date(p.arrivee));
     let ecart = "";
     if (arr < min) ecart = " · " + Math.round((min - arr) / 60000) + " min d'avance";
     else if (arr > max) ecart = " · " + Math.round((arr - max) / 60000) + " min de retard";
@@ -947,10 +911,7 @@
     ressenti: (k, r, fini) => { const p = etat.passages[k]; p.ressenti = r; p.ressentiFini = fini !== false; },
     repars: (k, h) => {
       aHeure(h);
-      const c = calculRavito(k);
       etat.passages[k].depart = maintenant().toISOString();
-      etat.preparees.iso = etat.preparees.iso.concat(c.iso);
-      etat.preparees.sachets = etat.preparees.sachets.concat(c.sachets);
       noterEvenement("je repars", COURSE.lieux[k].nom);
     },
     col: (decision) => {
@@ -1171,10 +1132,6 @@
       case "repars": {
         const p = etat.passages[ph.lieu];
         p.depart = n.toISOString();
-        if (calculAffiche) {
-          etat.preparees.iso = etat.preparees.iso.concat(calculAffiche.iso);
-          etat.preparees.sachets = etat.preparees.sachets.concat(calculAffiche.sachets);
-        }
         noterEvenement("je repars", COURSE.lieux[ph.lieu].nom);
         break;
       }

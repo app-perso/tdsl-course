@@ -213,3 +213,4 @@ body.fond-alerte, body.fond-alerte #app { background: var(--alerte); }
 .titre-scenarios { margin-top: 6px; }
 .grille-scenarios { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .btn-scenario { font-size: 15px; font-weight: 700; padding: 6px 8px; color: var(--texte); background: var(--carte); }
+.ravito-ligne { font-size: 22px; font-weight: 800; line-height: 1.25; }
